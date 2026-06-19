@@ -111,6 +111,15 @@ class NotchFilter(BaseEstimator, TransformerMixin):
     ----------
     fitted_ : bool
         True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> filt = NotchFilter(freqs=50.0)
+    >>> Y = np.random.randn(61, 1000)
+    >>> Y_filtered = filt.fit_transform(Y)
+    >>> Y_filtered.shape
+    (61, 1000)
     """
 
     def __init__(self, freqs=50.0, sfreq=256.0, notch_widths=None, n_jobs=None):
@@ -130,7 +139,7 @@ class NotchFilter(BaseEstimator, TransformerMixin):
 
         Returns
         -------
-        self : LineNoiseFilter
+        self : NotchFilter
         """
         self.fitted_ = True
         return self
@@ -170,3 +179,4 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         )
 
         return X_filtered
+
