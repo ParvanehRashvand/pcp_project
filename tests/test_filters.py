@@ -6,9 +6,7 @@ Run with: uv run pytest tests/test_filters.py -v
 
 import numpy as np
 import pytest
-import mne
-from pcp_project.estimators import BandPassFilter
-from pcp_project.estimators import NotchFilter
+from pcp_project.estimators import BandPassFilter, NotchFilter
 
 
 @pytest.fixture
@@ -104,13 +102,13 @@ def test_transform_before_fit_raises_error(eeg_signal):
 
 def test_does_not_modify_input(eeg_signal):
     """transform() must never modify the original signal.
- uv run pytest tests/test_filters.py -v
-    We save a copy before filtering.
-    After filtering, original must be unchanged.
-    This is a scikit-learn rule (lecture 3):
-    transform() must never modify X in place.
-    Inside transform() we use X.astype(np.float64)
-    which creates a new copy automatically.
+    uv run pytest tests/test_filters.py -v
+       We save a copy before filtering.
+       After filtering, original must be unchanged.
+       This is a scikit-learn rule (lecture 3):
+       transform() must never modify X in place.
+       Inside transform() we use X.astype(np.float64)
+       which creates a new copy automatically.
     """
     original = eeg_signal.copy()
     filt = BandPassFilter(frequency_bands=[[5, 10]])
@@ -118,31 +116,29 @@ def test_does_not_modify_input(eeg_signal):
     np.testing.assert_array_equal(eeg_signal, original)
 
 
-
-
-@pytest.fixture
-def eeg_signal():
-    return np.random.randn(61, 1000)
-
 def test_notch_output_shape(eeg_signal):
     filt = NotchFilter(freqs=50.0)
     result = filt.fit_transform(eeg_signal)
     assert result.shape == eeg_signal.shape
+
 
 def test_notch_output_is_float64(eeg_signal):
     filt = NotchFilter(freqs=50.0)
     result = filt.fit_transform(eeg_signal)
     assert result.dtype == np.float64
 
+
 def test_notch_fit_returns_self(eeg_signal):
     filt = NotchFilter(freqs=50.0)
     result = filt.fit(eeg_signal)
     assert result is filt
 
+
 def test_notch_fitted_attribute_exists(eeg_signal):
     filt = NotchFilter(freqs=50.0)
     filt.fit(eeg_signal)
     assert hasattr(filt, "fitted_")
+
 
 def test_notch_does_not_modify_input(eeg_signal):
     original = eeg_signal.copy()
@@ -163,11 +159,9 @@ def test_notch_removes_frequency():
     sfreq = 250.0
     t = np.arange(0, 15, 1 / sfreq)
 
-
     pure_50hz = np.sin(2 * np.pi * 50 * t).reshape(1, -1)
 
     filt = NotchFilter(freqs=50.0, sfreq=sfreq)
     filtered = filt.fit_transform(pure_50hz)
 
     assert np.var(filtered) < 0.05 * np.var(pure_50hz)
-
