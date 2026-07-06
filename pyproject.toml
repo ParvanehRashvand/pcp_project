@@ -18,4 +18,13 @@ include = ["pcp_project*"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
 ]
+
+[tool.coverage.run]
+source = ["pcp_project"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100
+skip_covered = false

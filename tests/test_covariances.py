@@ -98,3 +98,63 @@ def test_batch_ledoit_wolf_preserves_shape():
     ).fit_transform(X)
 
     assert ours.shape == (17, 9, 9)
+
+
+def test_batch_ledoit_wolf_matches_pyriemann_not_centered():
+    """Match pyRiemann when centering is requested."""
+
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((10, 15, 20))
+
+    ours = BatchCovariances(
+        estimator=batch_ledoit_wolf, assume_centered=False, block_size=1000
+    ).fit_transform(X)
+
+    theirs = Covariances(
+        estimator="lwf", assume_centered=False, block_size=1000
+    ).fit_transform(X)
+
+    assert np.allclose(ours, theirs, rtol=1e-6, atol=1e-8)
+
+
+def test_batch_ledoit_wolf_single_feature_returns_matrix():
+    """Single-feature input should still return a (1, 1) covariance."""
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((5, 1, 20))
+
+    cov = BatchCovariances(
+        estimator=batch_ledoit_wolf, assume_centered=True, block_size=1000
+    ).fit_transform(X)
+
+    assert cov.shape == (5, 1, 1)
+
+
+def test_batch_ledoit_wolf_invalid_dimension():
+    """Invalid input dimensions should raise a ValueError."""
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((10, 20))
+
+    estimator = BatchCovariances(
+        estimator=batch_ledoit_wolf,
+        assume_centered=True,
+        block_size=1000,
+    )
+
+    with pytest.raises(ValueError, match="shape"):
+        estimator.fit_transform(X)
+
+
+def test_batch_ledoit_wolf_warns_on_single_sample():
+    """A warning should be emitted when only one sample is provided."""
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((5, 10, 1))
+
+    estimator = BatchCovariances(
+        estimator=batch_ledoit_wolf, assume_centered=True, block_size=1000
+    )
+
+    with pytest.warns(UserWarning, match="Only one sample"):
+        estimator.fit_transform(X)

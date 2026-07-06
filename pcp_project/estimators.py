@@ -216,18 +216,7 @@ def batch_empirical_covariance(X):
     Returns
     -------
     covariance : ndarray of shape (n_features, n_features)"""
-    if X.ndim != 3:
-        warnings.warn("X must have shape (n_matrices, n_features, n_samples)")
-
-    if X.shape[2] == 1:
-        warnings.warn(
-            "Only one sample available. You may want to reshape your data array"
-        )
-
     covariance = X @ X.transpose(0, 2, 1) / X.shape[2]
-
-    if covariance.ndim == 0:
-        covariance = np.array([[covariance]])
     return covariance
 
 
@@ -267,6 +256,16 @@ def batch_ledoit_wolf_shrinkage(X, block_size=1000):
 
 def batch_ledoit_wolf(X, *, assume_centered, block_size):
     """Estimate the shrunk Ledoit-Wolf covariance matrix."""
+    if X.ndim != 3:
+        raise ValueError(
+            f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
+        )
+
+    if X.shape[2] == 1:
+        warnings.warn(
+            "Only one sample available. You may want to reshape your data array"
+        )
+
     if not assume_centered:
         X -= np.mean(X, axis=2, keepdims=True)
 
