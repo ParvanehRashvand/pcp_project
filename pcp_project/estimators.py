@@ -281,3 +281,40 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
     i = np.arange(n_features)
     shrunk_cov[:, i, i] += (shrinkages * mu)[:, None]
     return shrunk_cov, shrinkages
+
+class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y=None):
+        # nothing to learn
+        self.fitted_ = True
+        return self
+
+    def transform(self, X, groups=None):
+        """
+        Parameters
+        ----------
+        X : array-like, shape (n_windows,)
+            Probabilities or predictions per window.
+
+        groups : array-like, shape (n_windows,)
+            Subject ID for each window.
+        """
+        check_is_fitted(self)
+
+        X = np.asarray(X)
+
+        if groups is None:
+            raise ValueError("groups must be provided to aggregate per subject")
+
+        groups = np.asarray(groups)
+
+        unique_groups = np.unique(groups)
+
+        aggregated = np.array([
+            X[groups == g].mean()
+            for g in unique_groups
+        ])
+
+        return aggregated
