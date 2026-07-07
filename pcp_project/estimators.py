@@ -318,3 +318,121 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
         ])
 
         return aggregated
+    
+
+
+
+class SlidingWindow(BaseEstimator, TransformerMixin):
+    """Slice continuous multi-channel EEG signals into overlapping windows.
+
+    Parameters
+    ----------
+    length : int, default=200
+        The length of each window in number of samples.
+    step_size : int, default=50
+        The step size (stride) between consecutive windows.
+    label_strategy : str, default="majority"
+        Strategy to determine the label of a window from its samples.
+        Options: "majority" (most frequent), "last" (the last sample's label),
+        or "first" (the first sample's label).
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+    """
+
+    def __init__(self, length=200, step_size=50, label_strategy="majority"):
+        self.length = length
+        self.step_size = step_size
+        self.label_strategy = label_strategy
+
+    def fit(self, X, y=None):
+        """Validate parameters and return self.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            The continuous EEG signal.
+        y : ignored
+        """
+        if self.length <= 0:
+            raise ValueError("Window length must be greater than 0.")
+        if self.step_size <= 0:
+            raise ValueError("Step size must be greater than 0.")
+        if self.label_strategy not in ["majority", "last", "first"]:
+            raise ValueError(f"Unknown label_strategy: {self.label_strategy}")
+            
+        self.fitted_ = True
+        return self
+
+    def transform(self, X, y=None, groups=None):
+        """Chop continuous data into windows.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            The continuous EEG signals.
+        y : numpy.ndarray of shape (n_samples,), optional
+            Sample-wise labels corresponding to X.
+        groups : numpy.ndarray of shape (n_samples,), optional
+            Subject/group tracker corresponding to X.
+
+        Returns
+        -------
+        X_windows : numpy.ndarray of shape (n_windows, n_channels, length)
+            The windowed EEG data.
+        y_windows : numpy.ndarray of shape (n_windows,), optional
+            Returned only if y is provided.
+        groups_windows : numpy.ndarray of shape (n_windows,), optional
+            Returned only if groups is provided.
+        """
+        check_is_fitted(self)
+        
+        n_channels, n_samples = X.shape
+        
+        if n_samples < self.length:
+            raise ValueError(
+                f"Data length ({n_samples}) is shorter than window length ({self.length})."
+            )
+
+        start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
+        n_windows = len(start_idx)
+
+        indexer = start_idx[:, None] + np.arange(self.length)
+        
+        X_windows = X[:, indexer].transpose(1, 0, 2)
+
+        outputs = [X_windows]
+
+        if y is not None:
+            y = np.asarray(y)
+            y_windows = np.empty(n_windows, dtype=y.dtype)
+            
+            for i, start in enumerate(start_idx):
+                window_labels = y[start : start + self.length]
+                
+                if self.label_strategy == "majority":
+                    vals, counts = np.unique(window_labels, return_counts=True)
+                    y_windows[i] = vals[np.argmax(counts)]
+                elif self.label_strategy == "last":
+                    y_windows[i] = window_labels[-1]
+                elif self.label_strategy == "first":
+                    y_windows[i] = window_labels[0]
+                    
+            outputs.append(y_windows)
+
+        if groups is not None:
+            groups = np.asarray(groups)
+            groups_windows = np.empty(n_windows, dtype=groups.dtype)
+            
+            for i, start in enumerate(start_idx):
+                window_groups = groups[start : start + self.length]
+                vals, counts = np.unique(window_groups, return_counts=True)
+                groups_windows[i] = vals[np.argmax(counts)]
+                
+            outputs.append(groups_windows)
+
+        if len(outputs) == 1:
+            return outputs[0]
+        return tuple(outputs)
