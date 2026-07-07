@@ -9,6 +9,111 @@ import pyriemann
 import warnings
 
 
+
+class StateSelector(BaseEstimator, TransformerMixin):
+    """Select specific recording states from EEG signal.
+
+    This estimator selects only the timepoints belonging
+    to the requested states.
+
+    Parameters
+    ----------
+    states : list, default=None
+        List of state values to keep.
+        Values must match what appears in y.
+        If None, all timepoints are returned unchanged.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> selector = StateSelector(states=[1])
+    >>> X = np.random.randn(61, 1000)
+    >>> y = np.random.randint(0, 2, 1000)
+    >>> X_selected = selector.fit_transform(X, y=y)
+    >>> X_selected.shape[0]
+    61
+    """
+
+    def __init__(self, states=None):
+        self.states = states
+
+    def fit(self, X, y=None):
+        """Validate input and return self.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+
+        Returns
+        -------
+        self : StateSelector
+        """
+        self.fitted_ = True
+        return self
+
+    def transform(self, X, y=None):
+        """Select timepoints from EEG signal.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+            Required if states parameter was set in __init__.
+
+        Returns
+        -------
+        X_selected : numpy.ndarray of shape (n_channels, n_selected)
+            EEG signal with only requested state timepoints.
+            n_selected depends on selected states.
+        """
+        check_is_fitted(self)
+
+        X_copied = X.astype(np.float64)
+
+        if self.states is None or y is None:
+            return X_copied
+
+        y_arr = np.asarray(y).squeeze()
+
+        # no for loop
+        mask = np.isin(y_arr, self.states)
+
+        return X_copied[:, mask]
+
+    def fit_transform(self, X, y=None, **fit_params):
+        """Fit and transform in one step.
+
+        Overrides TransformerMixin.fit_transform to ensure
+        y is passed to transform() for state selection.
+        sklearn's default fit_transform does not pass y
+        to transform, but StateSelector needs y to select
+        the correct timepoints.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+
+        Returns
+        -------
+        X_selected : numpy.ndarray
+            EEG signal with only requested state timepoints.
+        """
+        return self.fit(X, y).transform(X, y)
+
+
 class BandPassFilter(BaseEstimator, TransformerMixin):
     """Filter EEG signals to keep only specific frequency bands.
 
@@ -283,6 +388,37 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
     return shrunk_cov, shrinkages
 
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
+    """Aggregate window-level predictions to subject-level predictions.
+
+        Takes predictions or probabilities for each window of a subject
+        and returns one prediction per subject by averaging all windows
+        belonging to the same subject.
+
+     Parameters
+        ----------
+        None
+            This estimator has no hyperparameters.
+
+        Attributes
+        ----------
+        fitted_ : bool
+            True after fit() has been called.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> agg = MeanProbabilityAggregator()
+        >>> X = np.array([0.8, 0.7, 0.9, 0.6, 0.4, 0.5])
+        >>> groups = np.array([1, 1, 1, 2, 2, 2])
+        >>> result = agg.fit_transform(X, groups=groups)
+        >>> result.shape
+        (2,)
+        >>> result[0]  # mean of subject 1: (0.8+0.7+0.9)/3
+        0.8
+        >>> result[1]  # mean of subject 2: (0.6+0.4+0.5)/3
+        0.5
+        """
+
     def __init__(self):
         pass
 
