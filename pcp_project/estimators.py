@@ -9,7 +9,6 @@ import pyriemann
 import warnings
 
 
-
 class StateSelector(BaseEstimator, TransformerMixin):
     """Select specific recording states from EEG signal.
 
@@ -288,10 +287,26 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         return X_filtered
 
 
-# TODO: vectorize Oracle Approximation Shrinkage and add it to estimator
 class BatchCovariances(pyriemann.estimation.Covariances):
-    def __init__(self, estimator="scm", **kwds):
+    """Estimate covariance matrices for a batch of signals.
+
+    Parameters
+    ----------
+    estimator : {"lwf", "oas"}, default="lwf"
+        Covariance estimator to use.
+    **kwds
+        Additional keyword arguments passed to the covariance estimator.
+    """
+
+    def __init__(self, estimator="lwf", **kwds):
         super().__init__(estimator=estimator, **kwds)
+        self.covariance_methods = {"lwf": batch_ledoit_wolf, "oas": batch_oas}
+        if estimator not in self.covariance_methods.keys():
+            raise ValueError(
+                f"Invalid method: '{estimator}'. "
+                f"Available methods: {list(self.covariance_methods.keys())}"
+            )
+        self.estimator = self.covariance_methods[estimator]
 
     def transform(self, X):
         """Estimate covariance matrices.
@@ -306,7 +321,17 @@ class BatchCovariances(pyriemann.estimation.Covariances):
         X_new : ndarray, shape (n_matrices, n_features, n_features)
             Covariance matrices.
         """
-        covmats, _ = batch_ledoit_wolf(X, **self.kwds)
+        if X.ndim != 3:
+            raise ValueError(
+                f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
+            )
+
+        if X.shape[2] == 1:
+            warnings.warn(
+                "Only one sample available. You may want to reshape your data array"
+            )
+
+        covmats, _ = self.estimator(X, **self.kwds)
         return covmats
 
 
@@ -320,14 +345,16 @@ def batch_empirical_covariance(X):
 
     Returns
     -------
-    covariance : ndarray of shape (n_features, n_features)"""
+    covariance : ndarray of shape (n_matrices, n_features, n_features)"""
     covariance = X @ X.transpose(0, 2, 1) / X.shape[2]
     return covariance
 
 
-def batch_ledoit_wolf_shrinkage(X, block_size=1000):
+def batch_ledoit_wolf_shrinkage(X):
     """Estimate the Ledoit Wolf shrinkage parameter for several matrices
 
+    Parameters
+    ----------
     X : ndarray, shape (n_matrices, n_features, n_samples)
 
     Returns
@@ -359,17 +386,23 @@ def batch_ledoit_wolf_shrinkage(X, block_size=1000):
     return shrinkage
 
 
-def batch_ledoit_wolf(X, *, assume_centered, block_size):
-    """Estimate the shrunk Ledoit-Wolf covariance matrix."""
-    if X.ndim != 3:
-        raise ValueError(
-            f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
-        )
+def batch_ledoit_wolf(X, *, assume_centered):
+    """Estimate batch Ledoit-Wolf covariance matrices.
 
-    if X.shape[2] == 1:
-        warnings.warn(
-            "Only one sample available. You may want to reshape your data array"
-        )
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        Ledoit-Wolf shrinkage coefficients.
+    """
 
     if not assume_centered:
         X -= np.mean(X, axis=2, keepdims=True)
@@ -377,7 +410,7 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
     n_features = X.shape[1]
 
     # get Ledoit-Wolf shrinkage
-    shrinkages = batch_ledoit_wolf_shrinkage(X, block_size=block_size)
+    shrinkages = batch_ledoit_wolf_shrinkage(X)
 
     emp_cov = batch_empirical_covariance(X)
     mu = np.linalg.trace(emp_cov) / n_features
@@ -387,36 +420,80 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
     shrunk_cov[:, i, i] += (shrinkages * mu)[:, None]
     return shrunk_cov, shrinkages
 
+
+def batch_oas(X, *, assume_centered=False):
+    """Estimate batch OAS covariance matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        OAS shrinkage coefficients.
+    """
+    n_matrices, n_features, n_samples = X.shape
+
+    if not assume_centered:
+        X -= np.mean(X, axis=2, keepdims=True)
+
+    emp_cov = batch_empirical_covariance(X)
+
+    alpha = np.mean(emp_cov**2, axis=(1, 2))
+
+    mu = np.linalg.trace(emp_cov) / n_features
+    mu_squared = mu**2
+
+    num = alpha + mu_squared
+    den = (n_samples + 1) * (alpha - mu_squared / n_features)
+    shrinkage = np.where(
+        den == 0, np.ones(den.shape), np.minimum(num / den, np.ones(den.shape))
+    )
+
+    shrunk_cov = (1.0 - shrinkage[:, None, None]) * emp_cov
+    i = np.arange(n_features)
+    shrunk_cov[:, i, i] += (shrinkage * mu)[:, None]
+
+    return shrunk_cov, shrinkage
+
+
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
     """Aggregate window-level predictions to subject-level predictions.
 
-       Takes predictions or probabilities for each window of a subject
-       and returns one prediction per subject by averaging all windows
-       belonging to the same subject.
+    Takes predictions or probabilities for each window of a subject
+    and returns one prediction per subject by averaging all windows
+    belonging to the same subject.
 
-       This is used as the LAST step in the pipeline:
-       SlidingWindow -> BatchCovariances -> TangentSpace
-       -> LogisticRegression -> MeanProbabilityAggregator
+    This is used as the LAST step in the pipeline:
+    SlidingWindow -> BatchCovariances -> TangentSpace
+    -> LogisticRegression -> MeanProbabilityAggregator
 
-       Attributes
-       ----------
-       fitted_ : bool
-           True after fit() has been called.
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
 
-       Examples
-       --------
-       >>> import numpy as np
-       >>> agg = MeanProbabilityAggregator()
-       >>> X = np.array([0.8, 0.7, 0.9, 0.6, 0.4, 0.5])
-       >>> groups = np.array([1, 1, 1, 2, 2, 2])
-       >>> result = agg.fit(X).transform(X, groups=groups)
-       >>> result.shape
-       (2,)
-       >>> round(float(result[0]), 1)
-       0.8
-       >>> round(float(result[1]), 1)
-       0.5
-       """
+    Examples
+    --------
+    >>> import numpy as np
+    >>> agg = MeanProbabilityAggregator()
+    >>> X = np.array([0.8, 0.7, 0.9, 0.6, 0.4, 0.5])
+    >>> groups = np.array([1, 1, 1, 2, 2, 2])
+    >>> result = agg.fit(X).transform(X, groups=groups)
+    >>> result.shape
+    (2,)
+    >>> round(float(result[0]), 1)
+    0.8
+    >>> round(float(result[1]), 1)
+    0.5
+    """
+
     def __init__(self):
         pass
 
@@ -446,14 +523,9 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
 
         unique_groups = np.unique(groups)
 
-        aggregated = np.array([
-            X[groups == g].mean()
-            for g in unique_groups
-        ])
+        aggregated = np.array([X[groups == g].mean() for g in unique_groups])
 
         return aggregated
-    
-
 
 
 class SlidingWindow(BaseEstimator, TransformerMixin):
@@ -470,7 +542,14 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
     label_strategy : str, default="majority"
         Window classification strategy. Options: "majority", "last", or "first".
     """
-    def __init__(self, length=200, step_size=50, padding_policy="valid", label_strategy="majority"):
+
+    def __init__(
+        self,
+        length=200,
+        step_size=50,
+        padding_policy="valid",
+        label_strategy="majority",
+    ):
         self.length = length
         self.step_size = step_size
         self.padding_policy = padding_policy
@@ -485,7 +564,7 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
             Continuous EEG training data.
         y : None
             Ignored.
-            
+
         Returns
         -------
         self : object
@@ -497,7 +576,7 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
             raise ValueError(f"Unknown padding_policy: {self.padding_policy}")
         if self.label_strategy not in ["majority", "last", "first"]:
             raise ValueError(f"Unknown label_strategy: {self.label_strategy}")
-        
+
         self.fitted_ = True
         return self
 
@@ -529,31 +608,33 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
             raise ValueError(
                 f"Data length ({n_samples}) is shorter than window length ({self.length})."
             )
-        
+
         remainder = (n_samples - self.length) % self.step_size
-        
+
         if remainder != 0 and self.padding_policy != "valid":
             pad_size = self.step_size - remainder
-            
+
             if self.padding_policy == "zero":
-                X = np.pad(X, ((0, 0), (0, pad_size)), mode='constant', constant_values=0)
+                X = np.pad(
+                    X, ((0, 0), (0, pad_size)), mode="constant", constant_values=0
+                )
                 if y is not None:
-                    y = np.pad(y, (0, pad_size), mode='constant', constant_values=y[-1])
+                    y = np.pad(y, (0, pad_size), mode="constant", constant_values=y[-1])
                 if groups is not None:
-                    groups = np.pad(groups, (0, pad_size), mode='edge') 
-                    
+                    groups = np.pad(groups, (0, pad_size), mode="edge")
+
             elif self.padding_policy == "edge":
-                X = np.pad(X, ((0, 0), (0, pad_size)), mode='edge')
+                X = np.pad(X, ((0, 0), (0, pad_size)), mode="edge")
                 if y is not None:
-                    y = np.pad(y, (0, pad_size), mode='edge')
+                    y = np.pad(y, (0, pad_size), mode="edge")
                 if groups is not None:
-                    groups = np.pad(groups, (0, pad_size), mode='edge')
-                    
+                    groups = np.pad(groups, (0, pad_size), mode="edge")
+
             n_samples = X.shape[1]
 
         start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
         n_windows = len(start_idx)
-        
+
         indexer = start_idx[:, None] + np.arange(self.length)
         X_windows = X[:, indexer].transpose(1, 0, 2)
 

@@ -27,8 +27,8 @@ def sample_data():
 def test_fit_returns_self(sample_data):
     """.fit() should return self
 
-     We do not want the fit function to change anything in the data
-     """
+    We do not want the fit function to change anything in the data
+    """
     X, _ = sample_data
     agg = MeanProbabilityAggregator()
 
@@ -40,9 +40,9 @@ def test_fit_returns_self(sample_data):
 def test_fitted_attribute_exists(sample_data):
     """fitted attribute must exist
 
-     We want to make sure, that our class
-     has the fitted_ attribute.
-     """
+    We want to make sure, that our class
+    has the fitted_ attribute.
+    """
     X, _ = sample_data
     agg = MeanProbabilityAggregator()
 
@@ -54,9 +54,9 @@ def test_fitted_attribute_exists(sample_data):
 def test_transform_requires_groups(sample_data):
     """Transform must require groups
 
-     Transforming should not work, if we
-     do not provide any groups.
-     """
+    Transforming should not work, if we
+    do not provide any groups.
+    """
     X, _ = sample_data
     agg = MeanProbabilityAggregator().fit(X)
 
@@ -72,6 +72,7 @@ def test_output_shape_is_number_of_groups(sample_data):
 
         with pytest.raises(ValueError):
             agg.transform(X)
+
     X, groups = sample_data
     agg = MeanProbabilityAggregator().fit(X)
 
@@ -92,10 +93,12 @@ def test_correct_group_means(sample_data):
 
     result = agg.transform(X, groups=groups)
 
-    expected = np.array([
-        np.mean([0.1, 0.2, 0.3]),  # A
-        np.mean([0.9, 0.8, 0.7])   # B
-    ])
+    expected = np.array(
+        [
+            np.mean([0.1, 0.2, 0.3]),  # A
+            np.mean([0.9, 0.8, 0.7]),  # B
+        ]
+    )
 
     np.testing.assert_allclose(result, expected)
 
@@ -133,7 +136,7 @@ def test_single_group_case():
 
 
 def test_groups_length_mismatch():
-    """Number of labels must match number of samples.    """
+    """Number of labels must match number of samples."""
     X = np.array([0.1, 0.2, 0.3])
     groups = np.array(["A", "B"])  # <- wrong length
 
