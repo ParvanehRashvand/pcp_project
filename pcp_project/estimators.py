@@ -390,35 +390,33 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
     """Aggregate window-level predictions to subject-level predictions.
 
-        Takes predictions or probabilities for each window of a subject
-        and returns one prediction per subject by averaging all windows
-        belonging to the same subject.
+       Takes predictions or probabilities for each window of a subject
+       and returns one prediction per subject by averaging all windows
+       belonging to the same subject.
 
-     Parameters
-        ----------
-        None
-            This estimator has no hyperparameters.
+       This is used as the LAST step in the pipeline:
+       SlidingWindow -> BatchCovariances -> TangentSpace
+       -> LogisticRegression -> MeanProbabilityAggregator
 
-        Attributes
-        ----------
-        fitted_ : bool
-            True after fit() has been called.
+       Attributes
+       ----------
+       fitted_ : bool
+           True after fit() has been called.
 
-        Examples
-        --------
-        >>> import numpy as np
-        >>> agg = MeanProbabilityAggregator()
-        >>> X = np.array([0.8, 0.7, 0.9, 0.6, 0.4, 0.5])
-        >>> groups = np.array([1, 1, 1, 2, 2, 2])
-        >>> result = agg.fit_transform(X, groups=groups)
-        >>> result.shape
-        (2,)
-        >>> result[0]  # mean of subject 1: (0.8+0.7+0.9)/3
-        0.8
-        >>> result[1]  # mean of subject 2: (0.6+0.4+0.5)/3
-        0.5
-        """
-
+       Examples
+       --------
+       >>> import numpy as np
+       >>> agg = MeanProbabilityAggregator()
+       >>> X = np.array([0.8, 0.7, 0.9, 0.6, 0.4, 0.5])
+       >>> groups = np.array([1, 1, 1, 2, 2, 2])
+       >>> result = agg.fit(X).transform(X, groups=groups)
+       >>> result.shape
+       (2,)
+       >>> round(float(result[0]), 1)
+       0.8
+       >>> round(float(result[1]), 1)
+       0.5
+       """
     def __init__(self):
         pass
 
