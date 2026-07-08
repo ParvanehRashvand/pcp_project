@@ -464,79 +464,99 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
     Parameters
     ----------
     length : int, default=200
-        The length of each window in number of samples.
+        Window length in number of samples.
     step_size : int, default=50
-        The step size (stride) between consecutive windows.
+        Stride step size between consecutive windows.
+    padding_policy : str, default="valid"
+        Strategy for leftover samples. Options: "valid" (drop), "zero", or "edge".
     label_strategy : str, default="majority"
-        Strategy to determine the label of a window from its samples.
-        Options: "majority" (most frequent), "last" (the last sample's label),
-        or "first" (the first sample's label).
-
-    Attributes
-    ----------
-    fitted_ : bool
-        True after fit() has been called.
+        Window classification strategy. Options: "majority", "last", or "first".
     """
-
-    def __init__(self, length=200, step_size=50, label_strategy="majority"):
+    def __init__(self, length=200, step_size=50, padding_policy="valid", label_strategy="majority"):
         self.length = length
         self.step_size = step_size
+        self.padding_policy = padding_policy
         self.label_strategy = label_strategy
 
     def fit(self, X, y=None):
-        """Validate parameters and return self.
+        """Validate sliding window parameters.
 
         Parameters
         ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            The continuous EEG signal.
-        y : ignored
+        X : array-like of shape (n_channels, n_samples)
+            Continuous EEG training data.
+        y : None
+            Ignored.
+            
+        Returns
+        -------
+        self : object
+            Fitted transformer instance.
         """
-        if self.length <= 0:
-            raise ValueError("Window length must be greater than 0.")
-        if self.step_size <= 0:
-            raise ValueError("Step size must be greater than 0.")
+        if self.length <= 0 or self.step_size <= 0:
+            raise ValueError("Length and step_size must be positive integers.")
+        if self.padding_policy not in ["valid", "zero", "edge"]:
+            raise ValueError(f"Unknown padding_policy: {self.padding_policy}")
         if self.label_strategy not in ["majority", "last", "first"]:
             raise ValueError(f"Unknown label_strategy: {self.label_strategy}")
-            
+        
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Chop continuous data into windows.
+        """Segment continuous data, labels, and tracking metadata into epochs.
 
         Parameters
         ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            The continuous EEG signals.
-        y : numpy.ndarray of shape (n_samples,), optional
-            Sample-wise labels corresponding to X.
-        groups : numpy.ndarray of shape (n_samples,), optional
-            Subject/group tracker corresponding to X.
+        X : array-like of shape (n_channels, n_samples)
+            Continuous EEG signals to reshape.
+        y : array-like of shape (n_samples,), optional
+            Sample-wise ground truth labels.
+        groups : array-like of shape (n_samples,), optional
+            Subject/session metadata trackers.
 
         Returns
         -------
-        X_windows : numpy.ndarray of shape (n_windows, n_channels, length)
-            The windowed EEG data.
-        y_windows : numpy.ndarray of shape (n_windows,), optional
-            Returned only if y is provided.
-        groups_windows : numpy.ndarray of shape (n_windows,), optional
-            Returned only if groups is provided.
+        X_windows : ndarray of shape (n_windows, n_channels, length)
+            Reshaped window arrays. Only returned standalone if y and groups are None.
+        y_windows : ndarray of shape (n_windows,), optional
+            Aggregated window-level labels.
+        groups_windows : ndarray of shape (n_windows,), optional
+            Aggregated window-level subject metadata trackers.
         """
         check_is_fitted(self)
-        
         n_channels, n_samples = X.shape
-        
+
         if n_samples < self.length:
             raise ValueError(
                 f"Data length ({n_samples}) is shorter than window length ({self.length})."
             )
+        
+        remainder = (n_samples - self.length) % self.step_size
+        
+        if remainder != 0 and self.padding_policy != "valid":
+            pad_size = self.step_size - remainder
+            
+            if self.padding_policy == "zero":
+                X = np.pad(X, ((0, 0), (0, pad_size)), mode='constant', constant_values=0)
+                if y is not None:
+                    y = np.pad(y, (0, pad_size), mode='constant', constant_values=y[-1])
+                if groups is not None:
+                    groups = np.pad(groups, (0, pad_size), mode='edge') 
+                    
+            elif self.padding_policy == "edge":
+                X = np.pad(X, ((0, 0), (0, pad_size)), mode='edge')
+                if y is not None:
+                    y = np.pad(y, (0, pad_size), mode='edge')
+                if groups is not None:
+                    groups = np.pad(groups, (0, pad_size), mode='edge')
+                    
+            n_samples = X.shape[1]
 
         start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
         n_windows = len(start_idx)
-
-        indexer = start_idx[:, None] + np.arange(self.length)
         
+        indexer = start_idx[:, None] + np.arange(self.length)
         X_windows = X[:, indexer].transpose(1, 0, 2)
 
         outputs = [X_windows]
@@ -544,29 +564,25 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         if y is not None:
             y = np.asarray(y)
             y_windows = np.empty(n_windows, dtype=y.dtype)
-            
             for i, start in enumerate(start_idx):
-                window_labels = y[start : start + self.length]
-                
+                w_labels = y[start : start + self.length]
                 if self.label_strategy == "majority":
-                    vals, counts = np.unique(window_labels, return_counts=True)
+                    vals, counts = np.unique(w_labels, return_counts=True)
                     y_windows[i] = vals[np.argmax(counts)]
                 elif self.label_strategy == "last":
-                    y_windows[i] = window_labels[-1]
+                    y_windows[i] = w_labels[-1]
                 elif self.label_strategy == "first":
-                    y_windows[i] = window_labels[0]
-                    
+                    y_windows[i] = w_labels[0]
             outputs.append(y_windows)
 
         if groups is not None:
             groups = np.asarray(groups)
             groups_windows = np.empty(n_windows, dtype=groups.dtype)
-            
             for i, start in enumerate(start_idx):
-                window_groups = groups[start : start + self.length]
-                vals, counts = np.unique(window_groups, return_counts=True)
+                # A window completely belongs to the subject dominating it
+                w_groups = groups[start : start + self.length]
+                vals, counts = np.unique(w_groups, return_counts=True)
                 groups_windows[i] = vals[np.argmax(counts)]
-                
             outputs.append(groups_windows)
 
         if len(outputs) == 1:
