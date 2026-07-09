@@ -19,6 +19,10 @@ include = ["pcp_project*"]
 dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
+    "ruff>=0.12",
+    "sphinx>=8",
+    "sphinx-autodoc-typehints",
+    "furo",
 ]
 
 [tool.coverage.run]

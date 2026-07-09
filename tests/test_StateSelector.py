@@ -1,20 +1,24 @@
 import numpy as np
 import pytest
-from PCP_Project_exercise.filters.StateSelector import StateSelector
+from sklearn.base import BaseEstimator, TransformerMixin
+from pcp_project.estimators import StateSelector
+
 
 @pytest.fixture
 def eeg_signal():
     rng = np.random.default_rng(42)
     return rng.normal(size=(61, 1000))
 
+
 @pytest.fixture
 def states():
     rng = np.random.default_rng(42)
     return rng.integers(0, 2, size=1000)
 
+
 # shape
 def test_state_selector_output_shape(eeg_signal, states):
-    selector_all = StateSelector([0,1])
+    selector_all = StateSelector([0, 1])
     res_all = selector_all.fit_transform(eeg_signal, y=states)
     assert res_all.shape == eeg_signal.shape
 
@@ -35,10 +39,11 @@ def test_state_selector_output_shape(eeg_signal, states):
     res_out = selector_out.fit_transform(eeg_signal, y=states)
     assert res_out.shape[1] == 0
 
+
 # dtype
 def test_state_selector_output_is_float64(eeg_signal, states):
     selector = StateSelector([0])
-    result = selector.fit_transform(eeg_signal, y = states)
+    result = selector.fit_transform(eeg_signal, y=states)
     assert result.dtype == np.float64
 
 
@@ -47,6 +52,7 @@ def test_state_selector_fit_returns_self(eeg_signal, states):
     selector = StateSelector([0])
     result = selector.fit(eeg_signal)
     assert result is selector
+
 
 # fitted attribute exists
 def test_state_selector_fitted_attribute_exists(eeg_signal, states):
@@ -71,24 +77,16 @@ def test_state_selector_transform_before_fit_raises_error():
 
 
 def test_state_selector_correct_values_selected():
-    X_simple = np.array([
-        [1.0, 2.0, 3.0, 4.0],
-        [1.0, 2.0, 3.0, 4.0]
-    ])
+    X_simple = np.array([[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]])
     y_simple = np.array([0, 1, 0, 1])
 
     selector = StateSelector(states=[0])
     result = selector.fit_transform(X_simple, y=y_simple)
 
-    expected_output = np.array([
-        [1.0, 3.0],
-        [1.0, 3.0]
-    ])
+    expected_output = np.array([[1.0, 3.0], [1.0, 3.0]])
     np.testing.assert_array_equal(result, expected_output)
 
 
-# Why we wrote fit_transform() manually
-from sklearn.base import BaseEstimator, TransformerMixin
 @pytest.mark.xfail(strict=False, reason="Some sklearn versions drop y in fit_transform")
 def test_sklearn_transformer_mixin_bug_directly():
     """
