@@ -7,7 +7,6 @@ import inspect
 def accepts_param(func, param_name):
     sig = inspect.signature(func)
     params = sig.parameters
-    # Prüfen ob Parameter explizit da ist ODER **kwargs existiert
     return (
         param_name in params
         or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
@@ -179,4 +178,4 @@ class SubjectPipeline(Pipeline):
         final_name = self.steps[-1][0]
         final_fit_params = fit_params_steps.get(final_name, {})
 
-    return Xt, yt, final_fit_params
+        return Xt, yt, final_fit_params
