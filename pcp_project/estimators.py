@@ -5,19 +5,75 @@ from scipy import signal
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 import mne
-import pyriemann
 import warnings
 
 
 class StateSelector(BaseEstimator):
+    """Select specific recording states from EEG signal.
+
+    This estimator selects only the timepoints belonging
+    to the requested states.
+
+    Parameters
+    ----------
+    states : list, default=None
+        List of state values to keep.
+        Values must match what appears in y.
+        If None, all timepoints are returned unchanged.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> selector = StateSelector(states=[1])
+    >>> X = np.random.randn(61, 1000)
+    >>> y = np.random.randint(0, 2, 1000)
+    >>> X_selected = selector.fit_transform(X, y=y)
+    >>> X_selected.shape[0]
+    61
+    """
+
     def __init__(self, states=None):
         self.states = states
 
     def fit(self, X, y=None):
+        """Validate input and return self.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+
+        Returns
+        -------
+        self : StateSelector
+        """
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Select timepoints from EEG signal.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+            Required if states parameter was set in __init__.
+
+        Returns
+        -------
+        X_selected : numpy.ndarray of shape (n_channels, n_selected)
+            EEG signal with only requested state timepoints.
+            n_selected depends on selected states.
+        """
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -53,20 +109,92 @@ class StateSelector(BaseEstimator):
         return X_selected, groups_selected
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and transform in one step.
+
+        Overrides TransformerMixin.fit_transform to ensure
+        y is passed to transform() for state selection.
+        sklearn's default fit_transform does not pass y
+        to transform, but StateSelector needs y to select
+        the correct timepoints.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : numpy.ndarray of shape (n_samples,), default=None
+            State labels.
+
+        Returns
+        -------
+        X_selected : numpy.ndarray
+            EEG signal with only requested state timepoints.
+        """
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
 
 
 class BandPassFilter(BaseEstimator, TransformerMixin):
+    """Filter EEG signals to keep only specific frequency bands.
+
+    Applies one or more bandpass filters and sums their outputs.
+
+    Parameters
+    ----------
+    frequency_bands : list of [float, float]
+        List of [low, high] frequency pairs in Hz.
+        Example: [[5, 10], [13, 35]]
+    sfreq : float, default=256.0
+        Sampling frequency of the EEG signal in Hz.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> filt = BandPassFilter(frequency_bands=[[5, 10]])
+    >>> X = np.random.randn(61, 1000)
+    >>> X_filtered = filt.fit_transform(X)
+    >>> X_filtered.shape
+    (61, 1000)
+    """
+
     def __init__(self, frequency_bands, sfreq=256.0):
         self.frequency_bands = frequency_bands
         self.sfreq = sfreq
 
     def fit(self, X, y=None, groups=None):
+        """Validate input and return self.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            EEG signal.
+        y : ignored
+
+        Returns
+        -------
+        self : BandPassFilter
+        """
+        self.fitted_ = True
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Apply bandpass filter to EEG signal.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_channels, n_samples)
+            Raw EEG signal.
+
+        Returns
+        -------
+        X_filtered : numpy.ndarray of shape (n_channels, n_samples)
+            Filtered EEG signal in float64.
+        """
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -111,6 +239,38 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
 
 
 class NotchFilter(BaseEstimator, TransformerMixin):
+    """Filter EEG signals to remove power line noise (50/60 Hz) using MNE.
+
+    Applies a notch filter to the signal to attenuate specific frequencies
+    while leaving other frequencies intact.
+
+    Parameters
+    ----------
+    freqs : float or list of float, default=50.0
+        Frequencies to notch filter. Can be a single frequency (e.g., 50.0)
+        or a list of frequencies (e.g., [50.0, 100.0]) to remove harmonics.
+    sfreq : float, default=256.0
+        Sampling frequency of the EEG signal in Hz.
+    notch_widths : float or array-like, default=None
+        Width of the notch at each frequency. If None, MNE uses freqs / 200.
+    n_jobs : int or str, default=None
+        Number of jobs to run in parallel. Useful for fast vectorized computation.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> filt = NotchFilter(freqs=50.0)
+    >>> Y = np.random.randn(61, 1000)
+    >>> Y_filtered = filt.fit_transform(Y)
+    >>> Y_filtered.shape
+    (61, 1000)
+    """
+
     def __init__(self, freqs=50.0, sfreq=256.0, notch_widths=None, n_jobs=None):
         self.freqs = freqs
         self.sfreq = sfreq
@@ -118,10 +278,34 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
 
     def fit(self, X, y=None, groups=None):
+        """Validate input and return self.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (..., n_times)
+            EEG signal array.
+        y : ignored
+
+        Returns
+        -------
+        self : NotchFilter
+        """
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Apply MNE notch filter to the EEG signal.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (..., n_times)
+            Raw EEG signal array.
+
+        Returns
+        -------
+        X_filtered : numpy.ndarray of shape (..., n_times)
+            Filtered EEG signal in float64.
+        """
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -164,20 +348,44 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         return self.transform(X, y, groups=groups)
 
 
-class BatchCovariances(pyriemann.estimation.Covariances):
-    def __init__(self, estimator="scm", assume_centered=False, block_size=1000):
-        super().__init__(estimator=estimator)
-        self.assume_centered = assume_centered
-        self.block_size = block_size
+class BatchCovariances(BaseEstimator, TransformerMixin):
+    """Estimate covariance matrices for a batch of signals.
 
-        if hasattr(self, "_set_output"):
-            self._set_output(transform="bypass")
+    Parameters
+    ----------
+    estimator : {"lwf", "oas"}, default="lwf"
+        Covariance estimator to use.
+    **kwds
+        Additional keyword arguments passed to the covariance estimator.
+    """
+
+    def __init__(self, estimator="lwf", assume_centered=False):
+        self.covariance_methods = {"lwf": batch_ledoit_wolf, "oas": batch_oas}
+        if estimator not in self.covariance_methods.keys():
+            raise ValueError(
+                f"Invalid method: '{estimator}'. "
+                f"Available methods: {list(self.covariance_methods.keys())}"
+            )
+        self.estimator = self.covariance_methods[estimator]
+        self.assume_centered = assume_centered
 
     def fit(self, X, y=None):
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Estimate covariance matrices.
+
+        Parameters
+        ----------
+        X : ndarray, shape (n_matrices, n_features, n_samples)
+            Multi-channel time-series.
+
+        Returns
+        -------
+        X_new : ndarray, shape (n_matrices, n_features, n_features)
+            Covariance matrices.
+        """
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -185,22 +393,47 @@ class BatchCovariances(pyriemann.estimation.Covariances):
         else:
             X_data = X
 
+        if X_data.ndim != 3:
+            raise ValueError(
+                f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
+            )
+
+        if X_data.shape[2] == 1:
+            warnings.warn(
+                "Only one sample available. You may want to reshape your data array"
+            )
+
         X_copied = X_data.copy()
 
-        if np.isnan(X_copied).any():
-            X_copied = np.nan_to_num(X_copied, nan=0.0)
-
-        covmats, _ = batch_ledoit_wolf(
-            X_copied, assume_centered=self.assume_centered, block_size=self.block_size
-        )
+        covmats, _ = self.estimator(X_copied, assume_centered=self.assume_centered)
         return covmats
 
 
 def batch_empirical_covariance(X):
+    """Compute the empirical covariance of several matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Data from which to compute the batched covariance estimate.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)"""
     return X @ X.transpose(0, 2, 1) / X.shape[2]
 
 
-def batch_ledoit_wolf_shrinkage(X, block_size=1000):
+def batch_ledoit_wolf_shrinkage(X):
+    """Estimate the Ledoit Wolf shrinkage parameter for several matrices
+
+    Parameters
+    ----------
+    X : ndarray, shape (n_matrices, n_features, n_samples)
+
+    Returns
+    -------
+    shrinkage : ndarray, shape (n_matrices,)
+    """
     n_matrices, n_features, n_samples = X.shape
     X = X.astype(float, copy=True).transpose(0, 2, 1)
 
@@ -224,20 +457,29 @@ def batch_ledoit_wolf_shrinkage(X, block_size=1000):
     return shrinkage
 
 
-def batch_ledoit_wolf(X, *, assume_centered, block_size):
-    if X.ndim != 3:
-        raise ValueError(
-            f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
-        )
+def batch_ledoit_wolf(X, *, assume_centered):
+    """Estimate batch Ledoit-Wolf covariance matrices.
 
-    if X.shape[2] == 1:
-        warnings.warn("Only one sample available.")
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        Ledoit-Wolf shrinkage coefficients.
+    """
 
     if not assume_centered:
         X -= np.mean(X, axis=2, keepdims=True)
 
     n_features = X.shape[1]
-    shrinkages = batch_ledoit_wolf_shrinkage(X, block_size=block_size)
+    shrinkages = batch_ledoit_wolf_shrinkage(X)
     emp_cov = batch_empirical_covariance(X)
     mu = np.linalg.trace(emp_cov) / n_features
 
@@ -245,6 +487,49 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
     i = np.arange(n_features)
     shrunk_cov[:, i, i] += (shrinkages * mu)[:, None]
     return shrunk_cov, shrinkages
+
+
+def batch_oas(X, *, assume_centered=False):
+    """Estimate batch OAS covariance matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        OAS shrinkage coefficients.
+    """
+
+    n_matrices, n_features, n_samples = X.shape
+
+    if not assume_centered:
+        X -= np.mean(X, axis=2, keepdims=True)
+
+    emp_cov = batch_empirical_covariance(X)
+
+    alpha = np.mean(emp_cov**2, axis=(1, 2))
+
+    mu = np.linalg.trace(emp_cov) / n_features
+    mu_squared = mu**2
+
+    num = alpha + mu_squared
+    den = (n_samples + 1) * (alpha - mu_squared / n_features)
+    shrinkage = np.where(
+        den == 0, np.ones(den.shape), np.minimum(num / den, np.ones(den.shape))
+    )
+
+    shrunk_cov = (1.0 - shrinkage[:, None, None]) * emp_cov
+    i = np.arange(n_features)
+    shrunk_cov[:, i, i] += (shrinkage * mu)[:, None]
+
+    return shrunk_cov, shrinkage
 
 
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):

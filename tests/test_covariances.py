@@ -107,3 +107,24 @@ def test_batch_covariances_invalid_estimator():
     """An unknown estimator name should raise a ValueError."""
     with pytest.raises(ValueError, match="Invalid method"):
         BatchCovariances(estimator="not_a_real_estimator")
+
+
+@pytest.mark.parametrize("estimator", ESTIMATORS)
+def test_batch_covariances_accepts_tuple_input(estimator):
+    """Tuple inputs should use the first element as the data."""
+    rng = np.random.default_rng(42)
+
+    X = rng.standard_normal((10, 15, 20))
+    y = np.arange(10)
+
+    ours_tuple = BatchCovariances(
+        estimator=estimator,
+        assume_centered=True,
+    ).fit_transform((X, y))
+
+    ours_array = BatchCovariances(
+        estimator=estimator,
+        assume_centered=True,
+    ).fit_transform(X)
+
+    assert np.allclose(ours_tuple, ours_array)
