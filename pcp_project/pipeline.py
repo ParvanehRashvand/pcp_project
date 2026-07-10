@@ -4,13 +4,14 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.metrics import accuracy_score
 import inspect
 
+
 def accepts_param(func, param_name):
     sig = inspect.signature(func)
     params = sig.parameters
-    return (
-        param_name in params
-        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    return param_name in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
     )
+
 
 class SubjectPipeline(Pipeline):
     def __init__(self, steps, mask=None):
@@ -112,7 +113,9 @@ class SubjectPipeline(Pipeline):
             vals = values[groups == g]
             vals = vals[~self._is_nan_label_array(vals)]
             if len(vals) == 0:
-                raise ValueError(f"Group {g!r} contains no valid labels after filtering.")
+                raise ValueError(
+                    f"Group {g!r} contains no valid labels after filtering."
+                )
             grouped_values.append(self._majority_vote(vals))
 
         return np.asarray(grouped_values)
@@ -146,9 +149,7 @@ class SubjectPipeline(Pipeline):
         Xt, yt = X, y
 
         fit_params_steps = {
-            name: {}
-            for name, step in self.steps
-            if step not in (None, "passthrough")
+            name: {} for name, step in self.steps if step not in (None, "passthrough")
         }
 
         for pname, pval in fit_params.items():

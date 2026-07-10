@@ -10,7 +10,6 @@ import warnings
 
 
 class StateSelector(BaseEstimator):
-
     def __init__(self, states=None):
         self.states = states
 
@@ -36,7 +35,8 @@ class StateSelector(BaseEstimator):
 
         if len(eye_states) != X_copied.shape[1]:
             import __main__
-            if hasattr(__main__, 'eye_states_mask'):
+
+            if hasattr(__main__, "eye_states_mask"):
                 eye_states = np.asarray(__main__.eye_states_mask).squeeze()
             else:
                 raise ValueError(
@@ -58,7 +58,6 @@ class StateSelector(BaseEstimator):
 
 
 class BandPassFilter(BaseEstimator, TransformerMixin):
-
     def __init__(self, frequency_bands, sfreq=256.0):
         self.frequency_bands = frequency_bands
         self.sfreq = sfreq
@@ -96,7 +95,9 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
             ]
         )
 
-        filtered_valid = np.stack([signal.sosfiltfilt(f, X_valid, axis=-1) for f in filters])
+        filtered_valid = np.stack(
+            [signal.sosfiltfilt(f, X_valid, axis=-1) for f in filters]
+        )
         summed_valid = filtered_valid.sum(axis=0)
 
         X_filtered = np.full_like(X, fill_value=np.nan)
@@ -110,7 +111,6 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
 
 
 class NotchFilter(BaseEstimator, TransformerMixin):
-
     def __init__(self, freqs=50.0, sfreq=256.0, notch_widths=None, n_jobs=None):
         self.freqs = freqs
         self.sfreq = sfreq
@@ -191,9 +191,7 @@ class BatchCovariances(pyriemann.estimation.Covariances):
             X_copied = np.nan_to_num(X_copied, nan=0.0)
 
         covmats, _ = batch_ledoit_wolf(
-            X_copied,
-            assume_centered=self.assume_centered,
-            block_size=self.block_size
+            X_copied, assume_centered=self.assume_centered, block_size=self.block_size
         )
         return covmats
 
@@ -218,7 +216,9 @@ def batch_ledoit_wolf_shrinkage(X, block_size=1000):
     delta_ = (XtX**2).sum(axis=(1, 2)) / n_samples**2
 
     beta = (beta_ / n_samples - delta_) / (n_features * n_samples)
-    delta = (delta_ - 2.0 * mu * emp_cov_trace.sum(axis=1) + n_features * mu**2) / n_features
+    delta = (
+        delta_ - 2.0 * mu * emp_cov_trace.sum(axis=1) + n_features * mu**2
+    ) / n_features
     beta = np.minimum(beta, delta)
     shrinkage = np.where(beta == 0, 0.0, beta / delta)
     return shrinkage
@@ -226,7 +226,9 @@ def batch_ledoit_wolf_shrinkage(X, block_size=1000):
 
 def batch_ledoit_wolf(X, *, assume_centered, block_size):
     if X.ndim != 3:
-        raise ValueError(f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}")
+        raise ValueError(
+            f"X must have shape (n_matrices, n_features, n_samples), got {X.shape}"
+        )
 
     if X.shape[2] == 1:
         warnings.warn("Only one sample available.")
@@ -246,7 +248,6 @@ def batch_ledoit_wolf(X, *, assume_centered, block_size):
 
 
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
-
     def __init__(self):
         pass
 
@@ -267,16 +268,18 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
         groups = np.asarray(groups)
         unique_groups = np.unique(groups)
 
-        aggregated = np.array([
-            X[groups == g].mean()
-            for g in unique_groups
-        ])
+        aggregated = np.array([X[groups == g].mean() for g in unique_groups])
         return aggregated
 
 
 class SlidingWindow(BaseEstimator, TransformerMixin):
-
-    def __init__(self, length=200, step_size=50, padding_policy="valid", label_strategy="majority"):
+    def __init__(
+        self,
+        length=200,
+        step_size=50,
+        padding_policy="valid",
+        label_strategy="majority",
+    ):
         self.length = length
         self.step_size = step_size
         self.padding_policy = padding_policy
@@ -305,7 +308,9 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         n_channels, n_samples = X.shape
 
         if n_samples < self.length:
-            raise ValueError(f"Data length ({n_samples}) is shorter than window length ({self.length}).")
+            raise ValueError(
+                f"Data length ({n_samples}) is shorter than window length ({self.length})."
+            )
 
         remainder = (n_samples - self.length) % self.step_size
 
@@ -314,14 +319,21 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
             pad_size = self.step_size - remainder
 
             if self.padding_policy == "zero":
-                X = np.pad(X, ((0, 0), (0, pad_size)), mode='constant', constant_values=0)
+                X = np.pad(
+                    X, ((0, 0), (0, pad_size)), mode="constant", constant_values=0
+                )
                 if groups is not None:
-                    groups = np.pad(groups, (0, pad_size), mode='constant', constant_values=groups[-1])
+                    groups = np.pad(
+                        groups,
+                        (0, pad_size),
+                        mode="constant",
+                        constant_values=groups[-1],
+                    )
 
             elif self.padding_policy == "edge":
-                X = np.pad(X, ((0, 0), (0, pad_size)), mode='edge')
+                X = np.pad(X, ((0, 0), (0, pad_size)), mode="edge")
                 if groups is not None:
-                    groups = np.pad(groups, (0, pad_size), mode='edge')
+                    groups = np.pad(groups, (0, pad_size), mode="edge")
 
             n_samples = X.shape[1]
 
