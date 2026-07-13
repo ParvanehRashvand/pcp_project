@@ -348,28 +348,161 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         return self.transform(X, y, groups=groups)
 
 
+def batch_empirical_covariance(X, assume_centered):
+    """Compute the empirical covariance of several matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Data from which to compute the batched covariance estimate.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+    """
+    if not assume_centered:
+        X = X - X.mean(axis=2, keepdims=True)
+    return X @ X.transpose(0, 2, 1) / X.shape[2]
+
+
+def batch_ledoit_wolf_shrinkage(X):
+    """Estimate the Ledoit Wolf shrinkage parameter for several matrices.
+
+    Parameters
+    ----------
+    X : ndarray, shape (n_matrices, n_features, n_samples)
+
+    Returns
+    -------
+    shrinkage : ndarray, shape (n_matrices,)
+    """
+    n_matrices, n_features, n_samples = X.shape
+    X = X.astype(float, copy=True).transpose(0, 2, 1)
+
+    X2 = X**2
+    emp_cov_trace = X2.sum(axis=1) / n_samples
+    mu = emp_cov_trace.sum(axis=1) / n_features
+
+    Xt = X.transpose(0, 2, 1)
+    XtX2 = X2.transpose(0, 2, 1) @ X2
+    beta_ = XtX2.sum(axis=(1, 2))
+
+    XtX = Xt @ X
+    delta_ = (XtX**2).sum(axis=(1, 2)) / n_samples**2
+
+    beta = (beta_ / n_samples - delta_) / (n_features * n_samples)
+    delta = (
+        delta_ - 2.0 * mu * emp_cov_trace.sum(axis=1) + n_features * mu**2
+    ) / n_features
+    beta = np.minimum(beta, delta)
+
+    shrinkage = np.zeros(n_matrices, dtype=float)
+    np.divide(beta, delta, out=shrinkage, where=delta > 0)
+    shrinkage = np.clip(shrinkage, 0.0, 1.0)
+    return shrinkage
+
+
+def batch_ledoit_wolf(X, *, assume_centered):
+    """Estimate batch Ledoit-Wolf covariance matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        Ledoit-Wolf shrinkage coefficients.
+    """
+    if not assume_centered:
+        X -= np.mean(X, axis=2, keepdims=True)
+
+    n_features = X.shape[1]
+    shrinkages = batch_ledoit_wolf_shrinkage(X)
+    emp_cov = batch_empirical_covariance(X, assume_centered)
+    mu = np.linalg.trace(emp_cov) / n_features
+
+    shrunk_cov = (1.0 - shrinkages)[:, None, None] * emp_cov
+    i = np.arange(n_features)
+    shrunk_cov[:, i, i] += (shrinkages * mu)[:, None]
+    return shrunk_cov, shrinkages
+
+
+def batch_oas(X, *, assume_centered=False):
+    """Estimate batch OAS covariance matrices.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_matrices, n_features, n_samples)
+        Input data.
+    assume_centered : bool, default=False
+        If False, center each signal before estimating the covariance.
+
+    Returns
+    -------
+    covariance : ndarray of shape (n_matrices, n_features, n_features)
+        Estimated covariance matrices.
+    shrinkage : ndarray of shape (n_matrices,)
+        OAS shrinkage coefficients.
+    """
+    n_matrices, n_features, n_samples = X.shape
+
+    if not assume_centered:
+        X -= np.mean(X, axis=2, keepdims=True)
+
+    emp_cov = batch_empirical_covariance(X, assume_centered)
+
+    alpha = np.mean(emp_cov**2, axis=(1, 2))
+
+    mu = np.linalg.trace(emp_cov) / n_features
+    mu_squared = mu**2
+
+    numerator = alpha + mu_squared
+    denominator = (n_samples + 1) * (alpha - mu_squared / n_features)
+    shrinkage = np.ones(len(X), dtype=float)
+    np.divide(numerator, denominator, out=shrinkage, where=denominator != 0)
+    shrinkage = np.clip(shrinkage, 0.0, 1.0)
+
+    shrunk_cov = (1.0 - shrinkage[:, None, None]) * emp_cov
+    i = np.arange(n_features)
+    shrunk_cov[:, i, i] += (shrinkage * mu)[:, None]
+
+    return shrunk_cov, shrinkage
+
+
 class BatchCovariances(BaseEstimator, TransformerMixin):
     """Estimate covariance matrices for a batch of signals.
 
     Parameters
     ----------
-    estimator : {"lwf", "oas"}, default="lwf"
+    estimator : {"scm", "lwf", "oas"}, default="scm"
         Covariance estimator to use.
     **kwds
         Additional keyword arguments passed to the covariance estimator.
     """
 
-    def __init__(self, estimator="lwf", assume_centered=False):
-        self.covariance_methods = {"lwf": batch_ledoit_wolf, "oas": batch_oas}
-        if estimator not in self.covariance_methods.keys():
+    _COVARIANCE_METHODS = {
+        "scm": batch_empirical_covariance,
+        "lwf": batch_ledoit_wolf,
+        "oas": batch_oas,
+    }
+
+    def __init__(self, estimator="scm", assume_centered=False):
+        if estimator not in self._COVARIANCE_METHODS.keys():
             raise ValueError(
                 f"Invalid method: '{estimator}'. "
-                f"Available methods: {list(self.covariance_methods.keys())}"
+                f"Available methods: {list(self._COVARIANCE_METHODS.keys())}"
             )
-        self.estimator = self.covariance_methods[estimator]
+        self.estimator = estimator
         self.assume_centered = assume_centered
 
     def fit(self, X, y=None):
+        """No fitting necessary, just for compatibility with sk-learn."""
         self.fitted_ = True
         return self
 
@@ -400,93 +533,15 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
 
         if X_data.shape[2] == 1:
             warnings.warn(
-                "Only one sample available. You may want to reshape your data array"
+                "Only one sample available. You may want to reshape your data array",
+                stacklevel=2,
             )
 
         X_copied = X_data.copy()
 
-        covmats, _ = self.estimator(X_copied, assume_centered=self.assume_centered)
-        return covmats
-
-
-def batch_empirical_covariance(X):
-    """Compute the empirical covariance of several matrices.
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_matrices, n_features, n_samples)
-        Data from which to compute the batched covariance estimate.
-
-    Returns
-    -------
-    covariance : ndarray of shape (n_matrices, n_features, n_features)"""
-    return X @ X.transpose(0, 2, 1) / X.shape[2]
-
-
-def batch_ledoit_wolf_shrinkage(X):
-    """Estimate the Ledoit Wolf shrinkage parameter for several matrices
-
-    Parameters
-    ----------
-    X : ndarray, shape (n_matrices, n_features, n_samples)
-
-    Returns
-    -------
-    shrinkage : ndarray, shape (n_matrices,)
-    """
-    n_matrices, n_features, n_samples = X.shape
-    X = X.astype(float, copy=True).transpose(0, 2, 1)
-
-    X2 = X**2
-    emp_cov_trace = X2.sum(axis=1) / n_samples
-    mu = emp_cov_trace.sum(axis=1) / n_features
-
-    Xt = X.transpose(0, 2, 1)
-    XtX2 = X2.transpose(0, 2, 1) @ X2
-    beta_ = XtX2.sum(axis=(1, 2))
-
-    XtX = Xt @ X
-    delta_ = (XtX**2).sum(axis=(1, 2)) / n_samples**2
-
-    beta = (beta_ / n_samples - delta_) / (n_features * n_samples)
-    delta = (
-        delta_ - 2.0 * mu * emp_cov_trace.sum(axis=1) + n_features * mu**2
-    ) / n_features
-    beta = np.minimum(beta, delta)
-    shrinkage = np.where(beta == 0, 0.0, beta / delta)
-    return shrinkage
-
-
-def batch_ledoit_wolf(X, *, assume_centered):
-    """Estimate batch Ledoit-Wolf covariance matrices.
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_matrices, n_features, n_samples)
-        Input data.
-    assume_centered : bool, default=False
-        If False, center each signal before estimating the covariance.
-
-    Returns
-    -------
-    covariance : ndarray of shape (n_matrices, n_features, n_features)
-        Estimated covariance matrices.
-    shrinkage : ndarray of shape (n_matrices,)
-        Ledoit-Wolf shrinkage coefficients.
-    """
-
-    if not assume_centered:
-        X -= np.mean(X, axis=2, keepdims=True)
-
-    n_features = X.shape[1]
-    shrinkages = batch_ledoit_wolf_shrinkage(X)
-    emp_cov = batch_empirical_covariance(X)
-    mu = np.linalg.trace(emp_cov) / n_features
-
-    shrunk_cov = (1.0 - shrinkages)[:, None, None] * emp_cov
-    i = np.arange(n_features)
-    shrunk_cov[:, i, i] += (shrinkages * mu)[:, None]
-    return shrunk_cov, shrinkages
+        covariance_method = self._COVARIANCE_METHODS[self.estimator]
+        covmats = covariance_method(X_copied, assume_centered=self.assume_centered)
+        return covmats[0] if type(covmats) is tuple else covmats
 
 
 def batch_oas(X, *, assume_centered=False):
