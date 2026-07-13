@@ -1,107 +1,77 @@
-"""Estimators for EEG signal processing (Fully Compatible with SubjectPipeline)."""
+"""EEG preprocessing and covariance estimators used by the project."""
 
+import warnings
+
+import mne
 import numpy as np
 from scipy import signal
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
-import mne
-import warnings
+
+from . import _helpers
+
+# FIX(ref): Resolve advertised state names locally; the reference compared names
+# directly with numeric sample codes and could select nothing.
+# FIX(ref): Collection helpers preserve variable-length subjects, contiguous
+# runs, window subject/state metadata, and first-seen aggregation order.
+from ._helpers import (
+    STATE_NAME_TO_CODE,
+    _map_recording_pairs,
+    _selected_runs,
+    _subject_collection,
+    _window_subjects,
+)
+
+_is_recording_pair = _helpers._is_recording_pair
+_is_run_list = _helpers._is_run_list
+_recording_pair = _helpers._recording_pair
+_state_values = _helpers._state_values
 
 
 class StateSelector(BaseEstimator):
-    """Select specific recording states from EEG signal.
-
-    This estimator selects only the timepoints belonging
-    to the requested states.
-
-    Parameters
-    ----------
-    states : list, default=None
-        List of state values to keep.
-        Values must match what appears in y.
-        If None, all timepoints are returned unchanged.
-
-    Attributes
-    ----------
-    fitted_ : bool
-        True after fit() has been called.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> selector = StateSelector(states=[1])
-    >>> X = np.random.randn(61, 1000)
-    >>> y = np.random.randint(0, 2, 1000)
-    >>> X_selected = selector.fit_transform(X, y=y)
-    >>> X_selected.shape[0]
-    61
-    """
+    """Keep selected recording states without joining separate state runs."""
 
     def __init__(self, states=None):
         self.states = states
 
     def fit(self, X, y=None):
-        """Validate input and return self.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            EEG signal.
-        y : numpy.ndarray of shape (n_samples,), default=None
-            State labels.
-
-        Returns
-        -------
-        self : StateSelector
-        """
+        """Validate no data-dependent parameters and mark the selector fitted."""
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Select timepoints from EEG signal.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            EEG signal.
-        y : numpy.ndarray of shape (n_samples,), default=None
-            State labels.
-            Required if states parameter was set in __init__.
-
-        Returns
-        -------
-        X_selected : numpy.ndarray of shape (n_channels, n_selected)
-            EEG signal with only requested state timepoints.
-            n_selected depends on selected states.
-        """
+        """Select samples or contiguous runs matching ``states``."""
         check_is_fitted(self, "fitted_")
+
+        # FIX(ref): Select collections run by run so disjoint states and
+        # variable-length subject boundaries remain intact.
+        collection = _subject_collection(X)
+        if collection is not None:
+            return [_selected_runs(subject, self.states) for subject in collection]
 
         if isinstance(X, tuple):
             if len(X) > 1 and groups is None:
                 groups = X[1]
             X = X[0]
 
-        X_copied = X.astype(np.float64)
+        X_copied = np.asarray(X, dtype=np.float64)
 
-        if self.states is None or groups is None:
+        # FIX(ref): Require local metadata for requested states, preserve a
+        # one-sample vector, and accept numeric codes or their advertised names.
+        if groups is None:
+            if self.states is not None:
+                raise ValueError("groups are required when states are selected")
             return X_copied
+        eye_states = np.asarray(groups)
+        if self.states is None:
+            return X_copied, eye_states
 
-        # Convert the incoming groups array
-        eye_states = np.asarray(groups).squeeze()
-
-        if len(eye_states) != X_copied.shape[1]:
-            import __main__
-
-            if hasattr(__main__, "eye_states_mask"):
-                eye_states = np.asarray(__main__.eye_states_mask).squeeze()
-            else:
-                raise ValueError(
-                    f"Length mismatch: 'groups' has length {len(eye_states)} "
-                    f"but X has {X_copied.shape[1]} samples. Ensure 'eye_states_mask' "
-                    "is defined in your main notebook workspace."
-                )
-
-        mask = np.isin(eye_states, self.states)
+        raw_states = np.atleast_1d(self.states)
+        states = [
+            STATE_NAME_TO_CODE[state] if isinstance(state, str) else int(state)
+            for state in raw_states
+        ]
+        mask = np.isin(eye_states, states) | np.isin(eye_states, raw_states)
 
         X_selected = X_copied[:, mask]
         groups_selected = eye_states[mask]
@@ -109,106 +79,45 @@ class StateSelector(BaseEstimator):
         return X_selected, groups_selected
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
-        """Fit and transform in one step.
-
-        Overrides TransformerMixin.fit_transform to ensure
-        y is passed to transform() for state selection.
-        sklearn's default fit_transform does not pass y
-        to transform, but StateSelector needs y to select
-        the correct timepoints.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            EEG signal.
-        y : numpy.ndarray of shape (n_samples,), default=None
-            State labels.
-
-        Returns
-        -------
-        X_selected : numpy.ndarray
-            EEG signal with only requested state timepoints.
-        """
+        """Fit the selector and transform while forwarding state metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
 
 
+# FIX(ref): Support direct array-like recordings and subject/run collections
+# while preserving bare-array versus metadata-pair returns, including all-NaN.
 class BandPassFilter(BaseEstimator, TransformerMixin):
-    """Filter EEG signals to keep only specific frequency bands.
-
-    Applies one or more bandpass filters and sums their outputs.
-
-    Parameters
-    ----------
-    frequency_bands : list of [float, float]
-        List of [low, high] frequency pairs in Hz.
-        Example: [[5, 10], [13, 35]]
-    sfreq : float, default=256.0
-        Sampling frequency of the EEG signal in Hz.
-
-    Attributes
-    ----------
-    fitted_ : bool
-        True after fit() has been called.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> filt = BandPassFilter(frequency_bands=[[5, 10]])
-    >>> X = np.random.randn(61, 1000)
-    >>> X_filtered = filt.fit_transform(X)
-    >>> X_filtered.shape
-    (61, 1000)
-    """
+    """Apply Butterworth band-pass filters to EEG recordings."""
 
     def __init__(self, frequency_bands, sfreq=256.0):
         self.frequency_bands = frequency_bands
         self.sfreq = sfreq
 
     def fit(self, X, y=None, groups=None):
-        """Validate input and return self.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            EEG signal.
-        y : ignored
-
-        Returns
-        -------
-        self : BandPassFilter
-        """
-        self.fitted_ = True
+        """Mark the stateless filter as fitted."""
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Apply bandpass filter to EEG signal.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (n_channels, n_samples)
-            Raw EEG signal.
-
-        Returns
-        -------
-        X_filtered : numpy.ndarray of shape (n_channels, n_samples)
-            Filtered EEG signal in float64.
-        """
+        """Filter one recording or a collection while preserving metadata."""
         check_is_fitted(self, "fitted_")
+
+        collection = _subject_collection(X)
+        if collection is not None:
+            return _map_recording_pairs(collection, self.transform)
 
         if isinstance(X, tuple):
             if len(X) > 1 and groups is None:
                 groups = X[1]
             X = X[0]
 
-        X = X.astype(np.float64)
+        X = np.asarray(X, dtype=np.float64)
 
         mask = ~np.isnan(X).any(axis=0)
         X_valid = X[:, mask]
 
         if X_valid.shape[1] == 0:
-            return X, groups
+            return X.copy() if groups is None else (X.copy(), groups)
 
         filters = np.array(
             [
@@ -231,45 +140,18 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
         X_filtered = np.full_like(X, fill_value=np.nan)
         X_filtered[:, mask] = summed_valid
 
-        return X_filtered, groups
+        return X_filtered if groups is None else (X_filtered, groups)
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and filter while forwarding recording metadata."""
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
 
+# FIX(ref): Keep usable notch frequencies and matching widths, skip empty MNE
+# calls, and preserve bare-array versus metadata-pair returns.
 class NotchFilter(BaseEstimator, TransformerMixin):
-    """Filter EEG signals to remove power line noise (50/60 Hz) using MNE.
-
-    Applies a notch filter to the signal to attenuate specific frequencies
-    while leaving other frequencies intact.
-
-    Parameters
-    ----------
-    freqs : float or list of float, default=50.0
-        Frequencies to notch filter. Can be a single frequency (e.g., 50.0)
-        or a list of frequencies (e.g., [50.0, 100.0]) to remove harmonics.
-    sfreq : float, default=256.0
-        Sampling frequency of the EEG signal in Hz.
-    notch_widths : float or array-like, default=None
-        Width of the notch at each frequency. If None, MNE uses freqs / 200.
-    n_jobs : int or str, default=None
-        Number of jobs to run in parallel. Useful for fast vectorized computation.
-
-    Attributes
-    ----------
-    fitted_ : bool
-        True after fit() has been called.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> filt = NotchFilter(freqs=50.0)
-    >>> Y = np.random.randn(61, 1000)
-    >>> Y_filtered = filt.fit_transform(Y)
-    >>> Y_filtered.shape
-    (61, 1000)
-    """
+    """Remove line-noise frequencies with MNE's notch filter."""
 
     def __init__(self, freqs=50.0, sfreq=256.0, notch_widths=None, n_jobs=None):
         self.freqs = freqs
@@ -278,34 +160,12 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
 
     def fit(self, X, y=None, groups=None):
-        """Validate input and return self.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (..., n_times)
-            EEG signal array.
-        y : ignored
-
-        Returns
-        -------
-        self : NotchFilter
-        """
+        """Mark the stateless filter as fitted."""
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Apply MNE notch filter to the EEG signal.
-
-        Parameters
-        ----------
-        X : numpy.ndarray of shape (..., n_times)
-            Raw EEG signal array.
-
-        Returns
-        -------
-        X_filtered : numpy.ndarray of shape (..., n_times)
-            Filtered EEG signal in float64.
-        """
+        """Filter one recording and preserve optional sample metadata."""
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -318,20 +178,22 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         mask = ~np.isnan(X_copied).any(axis=0)
         X_valid = X_copied[:, mask]
 
-        if X_valid.shape[1] == 0:
-            return X_copied, groups
-
-        freqs_array = (
-            np.atleast_1d(self.freqs)
-            if not isinstance(self.freqs, list)
-            else self.freqs
-        )
+        freqs_array = np.asarray(np.atleast_1d(self.freqs), dtype=float)
+        usable = freqs_array < self.sfreq / 2
+        freqs_array = freqs_array[usable]
+        notch_widths = self.notch_widths
+        if notch_widths is not None:
+            notch_widths = np.asarray(np.atleast_1d(notch_widths), dtype=float)
+            if len(notch_widths) == len(usable):
+                notch_widths = notch_widths[usable]
+        if X_valid.shape[1] == 0 or len(freqs_array) == 0:
+            return X_copied.copy() if groups is None else (X_copied.copy(), groups)
 
         X_filtered_valid = mne.filter.notch_filter(
             X_valid,
             Fs=self.sfreq,
             freqs=freqs_array,
-            notch_widths=self.notch_widths,
+            notch_widths=notch_widths,
             n_jobs=self.n_jobs,
             method="fir",
             phase="zero",
@@ -341,9 +203,10 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         X_filtered = np.full_like(X_copied, fill_value=np.nan)
         X_filtered[:, mask] = X_filtered_valid
 
-        return X_filtered, groups
+        return X_filtered if groups is None else (X_filtered, groups)
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and filter while forwarding recording metadata."""
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
@@ -544,75 +407,53 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
         return covmats[0] if type(covmats) is tuple else covmats
 
 
-def batch_oas(X, *, assume_centered=False):
-    """Estimate batch OAS covariance matrices.
-
-    Parameters
-    ----------
-    X : ndarray of shape (n_matrices, n_features, n_samples)
-        Input data.
-    assume_centered : bool, default=False
-        If False, center each signal before estimating the covariance.
-
-    Returns
-    -------
-    covariance : ndarray of shape (n_matrices, n_features, n_features)
-        Estimated covariance matrices.
-    shrinkage : ndarray of shape (n_matrices,)
-        OAS shrinkage coefficients.
-    """
-
-    n_matrices, n_features, n_samples = X.shape
-
-    if not assume_centered:
-        X -= np.mean(X, axis=2, keepdims=True)
-
-    emp_cov = batch_empirical_covariance(X)
-
-    alpha = np.mean(emp_cov**2, axis=(1, 2))
-
-    mu = np.linalg.trace(emp_cov) / n_features
-    mu_squared = mu**2
-
-    num = alpha + mu_squared
-    den = (n_samples + 1) * (alpha - mu_squared / n_features)
-    shrinkage = np.where(
-        den == 0, np.ones(den.shape), np.minimum(num / den, np.ones(den.shape))
-    )
-
-    shrunk_cov = (1.0 - shrinkage[:, None, None]) * emp_cov
-    i = np.arange(n_features)
-    shrunk_cov[:, i, i] += (shrinkage * mu)[:, None]
-
-    return shrunk_cov, shrinkage
-
-
+# FIX(ref): Unpack tuple metadata before conversion, preserve trailing axes and
+# first-seen subject order, and forward groups through fit_transform.
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
+    """Average aligned window-level values within each subject."""
+
     def __init__(self):
         pass
 
     def fit(self, X, y=None):
+        """Mark the stateless aggregator as fitted."""
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Return one mean probability array per subject in first-seen order."""
         check_is_fitted(self, "fitted_")
-        X = np.asarray(X)
 
         if isinstance(X, tuple):
+            if len(X) > 1 and groups is None:
+                groups = X[1]
             X = X[0]
+        X = np.asarray(X, dtype=float)
 
         if groups is None:
             raise ValueError("groups must be provided to aggregate per subject")
 
         groups = np.asarray(groups)
-        unique_groups = np.unique(groups)
-
-        aggregated = np.array([X[groups == g].mean() for g in unique_groups])
+        _, first_indices, inverse = np.unique(
+            groups, return_index=True, return_inverse=True
+        )
+        ordered_groups = np.argsort(first_indices)
+        aggregated = np.array(
+            [X[inverse == group].mean(axis=0) for group in ordered_groups]
+        )
         return aggregated
 
+    def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and aggregate while forwarding subject metadata."""
+        self.fit(X, y)
+        return self.transform(X, y, groups=groups)
 
+
+# FIX(ref): Window collections one contiguous run at a time, align zero/edge
+# padding with labels, and return a bare window array when metadata is absent.
 class SlidingWindow(BaseEstimator, TransformerMixin):
+    """Split recordings into fixed-length windows."""
+
     def __init__(
         self,
         length=200,
@@ -626,6 +467,7 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         self.label_strategy = label_strategy
 
     def fit(self, X, y=None):
+        """Validate window, padding, and label-strategy parameters."""
         if self.length <= 0 or self.step_size <= 0:
             raise ValueError("Length and step_size must be positive integers.")
         if self.padding_policy not in ["valid", "zero", "edge"]:
@@ -637,71 +479,71 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X, y=None, groups=None):
+        """Create windows and optional window-level metadata labels."""
         check_is_fitted(self, "fitted_")
 
-        # 1. Unpack pipeline structural tuple leakage safely
+        collection = _subject_collection(X)
+        if collection is not None:
+            return _window_subjects(self, collection)
+
         if isinstance(X, tuple):
             if len(X) > 1 and groups is None:
                 groups = X[1]
             X = X[0]
 
         n_channels, n_samples = X.shape
+        groups_arr = None if groups is None else np.asarray(groups)
 
-        if n_samples < self.length:
+        if n_samples < self.length and self.padding_policy == "valid":
             raise ValueError(
-                f"Data length ({n_samples}) is shorter than window length ({self.length})."
+                f"Data length ({n_samples}) is shorter than window length "
+                f"({self.length})."
             )
 
         remainder = (n_samples - self.length) % self.step_size
 
-        # 2. Manage padding configurations on both signal and eye state markers
-        if remainder != 0 and self.padding_policy != "valid":
-            pad_size = self.step_size - remainder
-
+        if (
+            n_samples < self.length or remainder != 0
+        ) and self.padding_policy != "valid":
+            pad_size = (
+                self.length - n_samples
+                if n_samples < self.length
+                else self.step_size - remainder
+            )
             if self.padding_policy == "zero":
                 X = np.pad(
-                    X, ((0, 0), (0, pad_size)), mode="constant", constant_values=0
+                    X,
+                    ((0, 0), (0, pad_size)),
+                    mode="constant",
+                    constant_values=0,
                 )
-                if groups is not None:
-                    groups = np.pad(
-                        groups,
-                        (0, pad_size),
-                        mode="constant",
-                        constant_values=groups[-1],
-                    )
-
-            elif self.padding_policy == "edge":
+            else:
                 X = np.pad(X, ((0, 0), (0, pad_size)), mode="edge")
-                if groups is not None:
-                    groups = np.pad(groups, (0, pad_size), mode="edge")
-
+            if groups_arr is not None:
+                groups_arr = np.pad(groups_arr, (0, pad_size), mode="edge")
             n_samples = X.shape[1]
 
         start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
-        n_windows = len(start_idx)
-
         indexer = start_idx[:, None] + np.arange(self.length)
         X_windows = X[:, indexer].transpose(1, 0, 2)
 
-        # 4. Generate window-level summary trackers out of sample-level eye state groups
-        groups_windows = None
-        if groups is not None:
-            groups_arr = np.asarray(groups)
-            groups_windows = np.empty(n_windows, dtype=groups_arr.dtype)
-            for i, start in enumerate(start_idx):
-                w_groups = groups_arr[start : start + self.length]
-                if len(w_groups) == 0:
-                    continue
-                if self.label_strategy == "majority":
-                    vals, counts = np.unique(w_groups, return_counts=True)
-                    groups_windows[i] = vals[np.argmax(counts)]
-                elif self.label_strategy == "last":
-                    groups_windows[i] = w_groups[-1]
-                elif self.label_strategy == "first":
-                    groups_windows[i] = w_groups[0]
+        if groups_arr is None:
+            return X_windows
 
+        n_windows = len(start_idx)
+        groups_windows = np.empty(n_windows, dtype=groups_arr.dtype)
+        for i, start in enumerate(start_idx):
+            w_groups = groups_arr[start : start + self.length]
+            if self.label_strategy == "majority":
+                vals, counts = np.unique(w_groups, return_counts=True)
+                groups_windows[i] = vals[np.argmax(counts)]
+            elif self.label_strategy == "last":
+                groups_windows[i] = w_groups[-1]
+            else:
+                groups_windows[i] = w_groups[0]
         return X_windows, groups_windows
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and create windows while forwarding sample metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
