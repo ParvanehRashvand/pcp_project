@@ -25,6 +25,11 @@ dev = [
     "sphinx-autodoc-typehints",
     "furo",
 ]
+docs = [
+    "sphinx>=8",
+    "sphinx-autodoc-typehints",
+    "furo",
+]
 
 [tool.coverage.run]
 source = ["pcp_project"]

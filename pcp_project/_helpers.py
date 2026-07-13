@@ -1,7 +1,6 @@
 """Private metadata-routing and recording-collection helpers."""
 
 import inspect
-
 import numpy as np
 
 # Metadata-routing helpers

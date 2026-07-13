@@ -831,6 +831,11 @@ dev = [
     { name = "sphinx" },
     { name = "sphinx-autodoc-typehints" },
 ]
+docs = [
+    { name = "furo" },
+    { name = "sphinx" },
+    { name = "sphinx-autodoc-typehints" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -850,6 +855,11 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.12" },
+    { name = "sphinx", specifier = ">=8" },
+    { name = "sphinx-autodoc-typehints" },
+]
+docs = [
+    { name = "furo" },
     { name = "sphinx", specifier = ">=8" },
     { name = "sphinx-autodoc-typehints" },
 ]
