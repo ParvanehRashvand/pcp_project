@@ -11,10 +11,10 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-project = 'pcp_project'
-copyright = '2026, -'
-author = '-'
-release = '0.0'
+project = "pcp_project"
+copyright = "2026, -"
+author = "-"
+release = "0.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -25,15 +25,14 @@ extensions = [
     "sphinx_autodoc_typehints",
 ]
 
-templates_path = ['_templates']
+templates_path = ["_templates"]
 exclude_patterns = []
-
 
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
+html_theme = "alabaster"
 html_static_path = []
 
 autodoc_default_options = {

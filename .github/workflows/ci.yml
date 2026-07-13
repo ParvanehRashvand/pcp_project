@@ -56,5 +56,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sphinx-html
-          path: docs/_build/html
+          path: docs/build/html
           if-no-files-found: error
