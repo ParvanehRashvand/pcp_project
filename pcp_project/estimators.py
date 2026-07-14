@@ -27,79 +27,89 @@ _is_run_list = _helpers._is_run_list
 _recording_pair = _helpers._recording_pair
 _state_values = _helpers._state_values
 
-
-class StateSelector(BaseEstimator):
-    """Keep selected recording states without joining separate state runs."""
-
-    def __init__(self, states=None):
-        self.states = states
-
-    def fit(self, X, y=None):
-        """Validate no data-dependent parameters and mark the selector fitted."""
-        self.fitted_ = True
-        return self
-
-    def transform(self, X, y=None, groups=None):
-        """Select samples or contiguous runs matching ``states``."""
-        check_is_fitted(self, "fitted_")
-
-        # FIX(ref): Select collections run by run so disjoint states and
-        # variable-length subject boundaries remain intact.
-        collection = _subject_collection(X)
-        if collection is not None:
-            return [_selected_runs(subject, self.states) for subject in collection]
-
-        if isinstance(X, tuple):
-            if len(X) > 1 and groups is None:
-                groups = X[1]
-            X = X[0]
-
-        X_copied = np.asarray(X, dtype=np.float64)
-
-        # FIX(ref): Require local metadata for requested states, preserve a
-        # one-sample vector, and accept numeric codes or their advertised names.
-        if groups is None:
-            if self.states is not None:
-                raise ValueError("groups are required when states are selected")
-            return X_copied
-        eye_states = np.asarray(groups)
-        if self.states is None:
-            return X_copied, eye_states
-
-        raw_states = np.atleast_1d(self.states)
-        states = [
-            STATE_NAME_TO_CODE[state] if isinstance(state, str) else int(state)
-            for state in raw_states
-        ]
-        mask = np.isin(eye_states, states) | np.isin(eye_states, raw_states)
-
-        X_selected = X_copied[:, mask]
-        groups_selected = eye_states[mask]
-
-        return X_selected, groups_selected
-
-    def fit_transform(self, X, y=None, groups=None, **fit_params):
-        """Fit the selector and transform while forwarding state metadata."""
-        self.fit(X, y)
-        return self.transform(X, y, groups=groups)
-
-
 # FIX(ref): Support direct array-like recordings and subject/run collections
 # while preserving bare-array versus metadata-pair returns, including all-NaN.
 class BandPassFilter(BaseEstimator, TransformerMixin):
-    """Apply Butterworth band-pass filters to EEG recordings."""
+    """Apply Butterworth band-pass filters to EEG recordings.
 
+       This transformer keeps only selected frequency bands from an EEG
+       recording. A single recording is expected to have shape
+       ``(n_channels, n_samples)``. The output has the same shape as the input.
+
+       Parameters
+       ----------
+       frequency_bands : list of list of float
+           Frequency ranges to keep, in Hz. For example, ``[[5, 10], [13, 35]]``
+           keeps activity between 5-10 Hz and 13-35 Hz.
+       sfreq : float, default=256.0
+           Sampling frequency of the EEG recording in Hz.
+
+       Notes
+       -----
+       The filter is stateless. It does not learn data-dependent parameters in
+       :meth:`fit`; the filtering is performed in :meth:`transform`.
+
+       Examples
+       --------
+       >>> import numpy as np
+       >>> from pcp_project.estimators import BandPassFilter
+       >>> X = np.random.randn(61, 1000)
+       >>> filt = BandPassFilter(frequency_bands=[[5, 10]], sfreq=256.0)
+       >>> X_filtered = filt.fit_transform(X)
+       >>> X_filtered.shape
+       (61, 1000)
+       """
     def __init__(self, frequency_bands, sfreq=256.0):
         self.frequency_bands = frequency_bands
         self.sfreq = sfreq
 
     def fit(self, X, y=None, groups=None):
-        """Mark the stateless filter as fitted."""
+        """Mark the filter as fitted.
+
+           The band-pass filter is stateless and does not learn parameters from
+           the data. This method exists for scikit-learn compatibility.
+
+           Parameters
+           ----------
+           X : array-like
+               EEG recording. Ignored during fitting.
+           y : None, default=None
+               Ignored. Present for scikit-learn compatibility.
+           groups : array-like, default=None
+               Optional metadata. Ignored during fitting.
+
+           Returns
+           -------
+           self : BandPassFilter
+               The fitted transformer.
+           """
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Filter one recording or a collection while preserving metadata."""
+        """Apply the band-pass filter to EEG data.
+
+          The input can be a single EEG recording, a collection of subject
+          recordings, or a tuple ``(X, groups)``. Metadata in ``groups`` is preserved
+          and returned unchanged.
+
+          Parameters
+          ----------
+          X : array-like, tuple, or collection
+              EEG data. A single recording should have shape
+              ``(n_channels, n_samples)``. A tuple is interpreted as
+              ``(recording, groups)``.
+          y : None, default=None
+              Ignored. Present for scikit-learn compatibility.
+          groups : array-like, default=None
+              Optional metadata such as sample states.
+
+          Returns
+          -------
+          ndarray or tuple or collection
+              Filtered EEG data with the same structure as the input. If metadata is
+              provided, the output is returned as ``(X_filtered, groups)``.
+          """
         check_is_fitted(self, "fitted_")
 
         collection = _subject_collection(X)
@@ -210,6 +220,60 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
+class StateSelector(BaseEstimator):
+    """Keep selected recording states without joining separate state runs."""
+
+    def __init__(self, states=None):
+        self.states = states
+
+    def fit(self, X, y=None):
+        """Validate no data-dependent parameters and mark the selector fitted."""
+        self.fitted_ = True
+        return self
+
+    def transform(self, X, y=None, groups=None):
+        """Select samples or contiguous runs matching ``states``."""
+        check_is_fitted(self, "fitted_")
+
+        # FIX(ref): Select collections run by run so disjoint states and
+        # variable-length subject boundaries remain intact.
+        collection = _subject_collection(X)
+        if collection is not None:
+            return [_selected_runs(subject, self.states) for subject in collection]
+
+        if isinstance(X, tuple):
+            if len(X) > 1 and groups is None:
+                groups = X[1]
+            X = X[0]
+
+        X_copied = np.asarray(X, dtype=np.float64)
+
+        # FIX(ref): Require local metadata for requested states, preserve a
+        # one-sample vector, and accept numeric codes or their advertised names.
+        if groups is None:
+            if self.states is not None:
+                raise ValueError("groups are required when states are selected")
+            return X_copied
+        eye_states = np.asarray(groups)
+        if self.states is None:
+            return X_copied, eye_states
+
+        raw_states = np.atleast_1d(self.states)
+        states = [
+            STATE_NAME_TO_CODE[state] if isinstance(state, str) else int(state)
+            for state in raw_states
+        ]
+        mask = np.isin(eye_states, states) | np.isin(eye_states, raw_states)
+
+        X_selected = X_copied[:, mask]
+        groups_selected = eye_states[mask]
+
+        return X_selected, groups_selected
+
+    def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit the selector and transform while forwarding state metadata."""
+        self.fit(X, y)
+        return self.transform(X, y, groups=groups)
 
 def batch_empirical_covariance(X, assume_centered):
     """Compute the empirical covariance of several matrices.

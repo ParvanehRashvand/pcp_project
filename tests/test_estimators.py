@@ -80,37 +80,261 @@ def test_state_selector(recording, subject_collection):
     np.testing.assert_array_equal(chosen, np.ones(N_SAMPLES // 2))
 
 
-def test_bandpass_filter(recording, subject_collection, monkeypatch):
-    monkeypatch.setattr(
-        "pcp_project.estimators.signal.sosfiltfilt",
-        lambda _, values, axis: values + 1.0,
+
+import numpy as np
+import pytest
+from sklearn.exceptions import NotFittedError
+
+from pcp_project.estimators import BandPassFilter
+
+
+@pytest.fixture
+def eeg_signal():
+    """Create deterministic fake EEG data.
+
+    The shape follows our project convention:
+    (n_channels, n_samples).
+    """
+    rng = np.random.default_rng(0)
+    return rng.normal(size=(61, 1000))
+
+
+@pytest.fixture
+def eeg_signal_float32():
+    """Create fake EEG data with float32 dtype."""
+    rng = np.random.default_rng(1)
+    return rng.normal(size=(61, 1000)).astype(np.float32)
+
+
+@pytest.fixture
+def eeg_signal_with_nan(eeg_signal):
+    """Create EEG data with a NaN interval."""
+    X = eeg_signal.copy()
+    X[:, 100:200] = np.nan
+    return X
+
+
+def test_bandpass_output_shape(eeg_signal):
+    """Output shape must be the same as input shape."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    result = filt.fit_transform(eeg_signal)
+
+    assert result.shape == eeg_signal.shape
+
+
+def test_bandpass_output_is_float64(eeg_signal_float32):
+    """Output must be float64 even if input is float32."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    result = filt.fit_transform(eeg_signal_float32)
+
+    assert result.dtype == np.float64
+
+
+def test_bandpass_single_band(eeg_signal):
+    """Filter must work with one frequency band."""
+    filt = BandPassFilter(frequency_bands=[[8, 13]])
+
+    result = filt.fit_transform(eeg_signal)
+
+    assert result.shape == eeg_signal.shape
+    assert result.dtype == np.float64
+
+
+def test_bandpass_multiple_bands(eeg_signal):
+    """Filter must work with multiple frequency bands."""
+    filt = BandPassFilter(frequency_bands=[[5, 10], [13, 35]])
+
+    result = filt.fit_transform(eeg_signal)
+
+    assert result.shape == eeg_signal.shape
+    assert result.dtype == np.float64
+
+
+def test_bandpass_default_sfreq():
+    """Default sampling frequency must be 256.0."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    assert filt.sfreq == 256.0
+
+
+def test_bandpass_fit_returns_self(eeg_signal):
+    """fit() must return self for scikit-learn compatibility."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    result = filt.fit(eeg_signal)
+
+    assert result is filt
+
+
+def test_bandpass_fitted_attribute_exists(eeg_signal):
+    """fit() must create the fitted_ attribute."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    filt.fit(eeg_signal)
+
+    assert hasattr(filt, "fitted_")
+    assert filt.fitted_ is True
+
+
+def test_bandpass_transform_before_fit_raises_error(eeg_signal):
+    """transform() before fit() must raise NotFittedError."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    with pytest.raises(NotFittedError):
+        filt.transform(eeg_signal)
+
+
+def test_bandpass_does_not_modify_input(eeg_signal):
+    """Filtering must not modify the original input array in place."""
+    original = eeg_signal.copy()
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    _ = filt.fit_transform(eeg_signal)
+
+    np.testing.assert_array_equal(eeg_signal, original)
+
+
+def test_bandpass_nan_mask_handling(eeg_signal_with_nan):
+    """NaN columns must stay NaN in the output."""
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+
+    result = filt.fit_transform(eeg_signal_with_nan)
+
+    assert result.shape == eeg_signal_with_nan.shape
+
+    # The NaN interval must stay NaN.
+    assert np.isnan(result[:, 100:200]).all()
+
+    # Valid parts should not contain NaN.
+    assert not np.isnan(result[:, :100]).any()
+    assert not np.isnan(result[:, 200:]).any()
+
+
+def test_bandpass_all_nan_returns_unchanged_shape():
+    """All-NaN input must be handled safely."""
+    X_all_nan = np.full((61, 1000), fill_value=np.nan)
+
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+    result = filt.fit_transform(X_all_nan)
+
+    assert result.shape == X_all_nan.shape
+    assert result is not X_all_nan
+    assert np.isnan(result).all()
+
+
+def test_bandpass_get_params():
+    """get_params() must return constructor parameters."""
+    filt = BandPassFilter(
+        frequency_bands=[[5, 10], [13, 35]],
+        sfreq=512.0,
     )
-    X, states = recording
-    X = X.copy()
-    X[:, -2:] = np.nan
-    filtered, output_states = BandPassFilter([[5, 10]]).fit_transform((X, states))
-    np.testing.assert_allclose(filtered[:, :-2], X[:, :-2] + 1)
-    assert np.isnan(filtered[:, -2:]).all()
-    np.testing.assert_array_equal(output_states, states)
 
-    alternate_states = 1 - states
-    _, output_states = BandPassFilter([[5, 10]]).fit_transform(
-        (X, states), groups=alternate_states
+    params = filt.get_params()
+
+    assert params["frequency_bands"] == [[5, 10], [13, 35]]
+    assert params["sfreq"] == 512.0
+
+
+def test_bandpass_preserves_groups_metadata(eeg_signal):
+    """If groups are passed, they must be returned unchanged."""
+    groups = np.arange(eeg_signal.shape[1])
+
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+    X_filtered, groups_out = filt.fit_transform(eeg_signal, groups=groups)
+
+    assert X_filtered.shape == eeg_signal.shape
+    np.testing.assert_array_equal(groups_out, groups)
+
+
+def test_bandpass_accepts_tuple_input(eeg_signal):
+    """Tuple input must be interpreted as (recording, groups)."""
+    groups = np.arange(eeg_signal.shape[1])
+
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+    X_filtered, groups_out = filt.fit_transform((eeg_signal, groups))
+
+    assert X_filtered.shape == eeg_signal.shape
+    np.testing.assert_array_equal(groups_out, groups)
+
+
+def test_bandpass_collection_of_recording_pairs():
+    """A collection of recording pairs must be filtered item by item."""
+    rng = np.random.default_rng(2)
+
+    X1 = rng.normal(size=(61, 1000))
+    X2 = rng.normal(size=(61, 1500))
+
+    groups1 = np.zeros(X1.shape[1], dtype=int)
+    groups2 = np.ones(X2.shape[1], dtype=int)
+
+    collection = [
+        (X1, groups1),
+        (X2, groups2),
+    ]
+
+    filt = BandPassFilter(frequency_bands=[[5, 10]])
+    result = filt.fit_transform(collection)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+
+    X1_filtered, groups1_out = result[0]
+    X2_filtered, groups2_out = result[1]
+
+    assert X1_filtered.shape == X1.shape
+    assert X2_filtered.shape == X2.shape
+
+    np.testing.assert_array_equal(groups1_out, groups1)
+    np.testing.assert_array_equal(groups2_out, groups2)
+
+
+def test_bandpass_removes_frequency_outside_band():
+    """A 5-10 Hz filter should strongly reduce a 50 Hz signal."""
+    sfreq = 256.0
+    n_samples = int(4 * sfreq)
+    t = np.arange(n_samples) / sfreq
+
+    signal_50_hz = np.sin(2 * np.pi * 50 * t)
+    X = np.tile(signal_50_hz, (61, 1))
+
+    filt = BandPassFilter(
+        frequency_bands=[[5, 10]],
+        sfreq=sfreq,
     )
-    np.testing.assert_array_equal(output_states, alternate_states)
+    result = filt.fit_transform(X)
 
-    all_nan = np.full_like(X, np.nan)
-    np.testing.assert_equal(BandPassFilter([[5, 10]]).fit_transform(all_nan), all_nan)
+    # Ignore filter edge effects.
+    middle = slice(256, -256)
 
-    bandpass = BandPassFilter([[5, 10]])
-    filtered_subjects = bandpass.fit_transform(subject_collection)
-    np.testing.assert_allclose(filtered_subjects[0][0], subject_collection[0][0] + 1)
+    assert np.var(result[:, middle]) < 0.01 * np.var(X[:, middle])
 
-    selected_runs = StateSelector([0]).fit_transform(subject_collection)
-    filtered_runs = bandpass.fit_transform(selected_runs)
-    assert [len(runs) for runs in filtered_runs] == [2, 1]
-    np.testing.assert_allclose(filtered_runs[0][0][0], selected_runs[0][0][0] + 1)
 
+def test_bandpass_preserves_frequency_inside_band():
+    """A 5-10 Hz filter should preserve an 8 Hz signal."""
+    sfreq = 256.0
+    n_samples = int(4 * sfreq)
+    t = np.arange(n_samples) / sfreq
+
+    signal_8_hz = np.sin(2 * np.pi * 8 * t)
+    X = np.tile(signal_8_hz, (61, 1))
+
+    filt = BandPassFilter(
+        frequency_bands=[[5, 10]],
+        sfreq=sfreq,
+    )
+    result = filt.fit_transform(X)
+
+    # Ignore filter edge effects.
+    middle = slice(256, -256)
+
+    correlation = np.corrcoef(
+        result[0, middle],
+        signal_8_hz[middle],
+    )[0, 1]
+
+    assert correlation > 0.95
 
 def test_notch_filter(recording, monkeypatch):
     X, states = recording
