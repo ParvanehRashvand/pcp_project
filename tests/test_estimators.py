@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 from pyriemann.estimation import Covariances
+from sklearn.exceptions import NotFittedError
+
 
 from pcp_project.estimators import (
     BandPassFilter,
@@ -80,12 +82,6 @@ def test_state_selector(recording, subject_collection):
     np.testing.assert_array_equal(chosen, np.ones(N_SAMPLES // 2))
 
 
-
-import numpy as np
-import pytest
-from sklearn.exceptions import NotFittedError
-
-from pcp_project.estimators import BandPassFilter
 
 
 @pytest.fixture
