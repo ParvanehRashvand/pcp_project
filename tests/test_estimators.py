@@ -82,8 +82,6 @@ def test_state_selector(recording, subject_collection):
     np.testing.assert_array_equal(chosen, np.ones(N_SAMPLES // 2))
 
 
-
-
 @pytest.fixture
 def eeg_signal():
     """Create deterministic fake EEG data.
@@ -331,6 +329,7 @@ def test_bandpass_preserves_frequency_inside_band():
     )[0, 1]
 
     assert correlation > 0.95
+
 
 def test_notch_filter(recording, monkeypatch):
     X, states = recording
