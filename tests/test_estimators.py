@@ -669,24 +669,150 @@ def test_batch_covariances_accepts_tuple_input(estimator):
 # Tests of MeanProbabilityAggregator Class
 ##########################################################################
 
-
-def test_mean_probability_aggregator():
-    values = np.arange(16, dtype=float).reshape(4, 2, 2)
-    groups = np.array(["s2", "s1", "s2", "s1"])
+def test_fit_sets_attribute():
+    """Verify that fit sets the fitted_ attribute and returns self."""
     aggregator = MeanProbabilityAggregator()
-    result = aggregator.fit_transform((values, groups))
-    expected = np.stack([values[[0, 2]].mean(axis=0), values[[1, 3]].mean(axis=0)])
-    np.testing.assert_allclose(result, expected)
+    assert not hasattr(aggregator, "fitted_")
 
-    explicit_groups = np.array(["s2", "s2", "s1", "s1"])
-    result = aggregator.transform((values, groups), groups=explicit_groups)
-    np.testing.assert_allclose(
-        result, [values[:2].mean(axis=0), values[2:].mean(axis=0)]
-    )
+    returned_estimator = aggregator.fit(X=np.array([0.1, 0.2]), y=None)
+
+    assert hasattr(aggregator, "fitted_")
+    assert aggregator.fitted_ is True
+    assert returned_estimator is aggregator
+
+
+def test_not_fitted_raises_error():
+    """Verify that calling predict or transform before fit raises NotFittedError."""
+    aggregator = MeanProbabilityAggregator()
+    values = np.array([0.1, 0.2])
+    groups = np.array(["s1", "s1"])
+
+    with pytest.raises(NotFittedError):
+        aggregator.predict_proba(values, groups=groups)
+
+    with pytest.raises(NotFittedError):
+        aggregator.predict(values, groups=groups)
+
+    with pytest.raises(NotFittedError):
+        aggregator.transform(values, groups=groups)
+
+
+def test_missing_groups_raises_value_error():
+    """Verify that a ValueError is raised when groups are not provided in any format."""
+    aggregator = MeanProbabilityAggregator()
+    aggregator.fit(None)
+    values = np.array([0.1, 0.2])
 
     with pytest.raises(ValueError, match="groups must be provided"):
-        aggregator.transform(values)
+        aggregator.transform(values, groups=None)
 
+
+def test_aggregation_order_and_values_1d():
+    """Verify aggregation on 1D arrays, ensuring correct averaging and first-appearance ordering."""
+    # "s2" appears first, then "s1"
+    groups = np.array(["s2", "s1", "s2", "s1"])
+    values = np.array([10.0, 1.0, 20.0, 3.0])
+
+    aggregator = MeanProbabilityAggregator()
+    aggregator.fit(None)
+
+    # Expected order: s2 (mean of 10 and 20 -> 15), then s1 (mean of 1 and 3 -> 2)
+    expected = np.array([15.0, 2.0])
+    result = aggregator.transform(values, groups=groups)
+
+    np.testing.assert_allclose(result, expected)
+
+
+def test_aggregation_order_and_values_multi_dim():
+    """Verify aggregation handles multi-dimensional arrays (windows, features/classes)."""
+    # 4 windows, 2 classes/features
+    values = np.array(
+        [
+            [0.8, 0.2],  # s2
+            [0.1, 0.9],  # s1
+            [0.6, 0.4],  # s2
+            [0.3, 0.7],  # s1
+        ]
+    )
+    groups = np.array(["s2", "s1", "s2", "s1"])
+
+    aggregator = MeanProbabilityAggregator()
+    aggregator.fit(None)
+
+    # Expected:
+    # s2 mean: [(0.8 + 0.6)/2, (0.2 + 0.4)/2] = [0.7, 0.3]
+    # s1 mean: [(0.1 + 0.3)/2, (0.9 + 0.7)/2] = [0.2, 0.8]
+    expected = np.array([[0.7, 0.3], [0.2, 0.8]])
+    result = aggregator.transform(values, groups=groups)
+
+    np.testing.assert_allclose(result, expected)
+
+
+def test_tuple_input_for_pipeline():
+    """Verify that passing (X, groups) as a tuple works correctly for pipelines."""
+    values = np.array([10.0, 1.0, 20.0, 3.0])
+    groups = np.array(["s2", "s1", "s2", "s1"])
+
+    aggregator = MeanProbabilityAggregator()
+    aggregator.fit(None)
+
+    # Passing tuple, omitting explicit groups arg
+    result = aggregator.transform((values, groups))
+    expected = np.array([15.0, 2.0])
+
+    np.testing.assert_allclose(result, expected)
+
+
+def test_explicit_groups_overrides_tuple_groups():
+    """Verify that explicit groups parameter overrides groups bundled inside a tuple."""
+    values = np.array([10.0, 20.0, 30.0, 40.0])
+    bundled_groups = np.array(["s1", "s1", "s2", "s2"])
+    explicit_groups = np.array(["g1", "g2", "g1", "g2"])
+
+    aggregator = MeanProbabilityAggregator()
+    aggregator.fit(None)
+
+    # Should use explicit_groups:
+    # g1 mean (indices 0, 2): (10 + 30) / 2 = 20
+    # g2 mean (indices 1, 4): (20 + 40) / 2 = 30
+    result = aggregator.transform((values, bundled_groups), groups=explicit_groups)
+    expected = np.array([20.0, 30.0])
+
+    np.testing.assert_allclose(result, expected)
+
+
+@pytest.mark.parametrize(
+    "threshold, expected_labels",
+    [
+        (0.5, [1, 0]),  # 0.7 >= 0.5 (1), 0.4 < 0.5 (0)
+        (0.8, [0, 0]),  # Both below 0.8
+        (0.3, [1, 1]),  # Both above 0.3
+    ],
+)
+def test_predict_thresholding(threshold, expected_labels):
+    """Verify that predict thresholds averaged probabilities correctly based on threshold."""
+    # Mean values: s2 = 0.7, s1 = 0.4
+    values = np.array([0.8, 0.3, 0.6, 0.5])
+    groups = np.array(["s2", "s1", "s2", "s1"])
+
+    aggregator = MeanProbabilityAggregator(threshold=threshold)
+    aggregator.fit(None)
+
+    predictions = aggregator.predict(values, groups=groups)
+    np.testing.assert_array_equal(predictions, expected_labels)
+
+
+def test_fit_transform_combines_steps():
+    """Verify fit_transform successfully fits the model and returns transformed outputs."""
+    values = np.array([10.0, 1.0, 20.0, 3.0])
+    groups = np.array(["s2", "s1", "s2", "s1"])
+
+    aggregator = MeanProbabilityAggregator()
+    result = aggregator.fit_transform(values, groups=groups)
+
+    assert aggregator.fitted_ is True
+    expected = np.array([15.0, 2.0])
+    np.testing.assert_allclose(result, expected)
 
 ##########################################################################
 # Tests of SlidingWindow Class

@@ -770,8 +770,6 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
 ###########################################################################################
 # MeanProbabilityAggregator
 ###########################################################################################
-# FIX(ref): Unpack tuple metadata before conversion, preserve trailing axes and
-# first-seen subject order, and forward groups through fit_transform.
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
     """Aggregate window-level probabilities into one prediction per subject.
 
