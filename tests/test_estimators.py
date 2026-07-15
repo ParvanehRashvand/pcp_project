@@ -757,3 +757,278 @@ def test_sliding_window_validation(recording, subject_collection):
     np.testing.assert_array_equal(
         StateSelector().fit_transform(numeric_list), numeric_list
     )
+
+import tempfile
+from pathlib import Path
+import pandas as pd
+import pytest
+import numpy as np
+
+from pcp_project.data import (
+    load_labels,
+    list_subject_ids,
+    binary_target,
+    balanced_subject_ids,
+    load_subject,
+)
+
+
+@pytest.fixture
+def mock_data_environment():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        labels_data = {
+            "EEG_ID": ["sub_01", "sub_02", "sub_03", "sub_04"],
+            "SCID5_CV_Depression": [1, 0, 0, 0],
+            "SCID5_CV_OCD": [0, 0, 1, 0],
+            "SCID5_CV_Tic_TrichoDerma_Hoarding": [0, 0, 0, 0],
+            "SCID5_CV_SAD": [0, 0, 0, 0],
+            "SCID5_CV_PHOB": [0, 0, 0, 0],
+            "SCID5_CV_PANIC": [0, 0, 0, 0],
+            "SCID5_CV_AGORA": [0, 0, 0, 0],
+            "SCID5_CV_GAD": [0, 0, 0, 0],
+            "SCID5_CV_PTSD": [0, 0, 0, 0],
+            "SCID5_CV_Soma_Health": [0, 0, 0, 0],
+            "SCID5_CV_Separation": [0, 0, 0, 0],
+            "SCID5_CV_Sleep": [0, 0, 0, 0],
+            "SCID5_CV_Bodydysmorphia": [0, 0, 0, 0],
+            "SCID5_CV_Eating": [0, 0, 0, 0],
+            "SCID5_CV_Anxiety_OCD_etc": [0, 0, 0, 0],
+            "SCID5_CV_Eating_Bodydysmorphia": [0, 0, 0, 0],
+            "SCID5_CV_ADHD_Explosive": [0, 0, 0, 0],
+        }
+        df = pd.DataFrame(labels_data)
+        df.to_csv(tmp_path / "labels_reduced.csv", index=False)
+
+        for sub_id in ["sub_01", "sub_02", "sub_03", "sub_04"]:
+            mock_x = np.random.randn(100, 4)  # shape (n_samples, n_channels) -> بعداً T می‌شود
+            mock_y = np.random.randint(0, 2, size=100)
+            np.savez(tmp_path / f"{sub_id}.npz", X=mock_x, y=mock_y)
+
+        yield tmp_path
+
+
+def test_load_labels(mock_data_environment):
+    csv_path = mock_data_environment / "labels_reduced.csv"
+    df = load_labels(csv_path)
+    assert df.index.name == "EEG_ID"
+    assert "sub_01" in df.index
+
+
+def test_list_subject_ids(mock_data_environment):
+    subjects = list_subject_ids(mock_data_environment)
+    assert subjects == ["sub_01", "sub_02", "sub_03", "sub_04"]
+
+
+def test_binary_target(mock_data_environment):
+    df = load_labels(mock_data_environment / "labels_reduced.csv")
+    subject_ids = ["sub_01", "sub_02", "sub_03"]
+
+    target_any = binary_target(df, subject_ids)
+    np.testing.assert_array_equal(target_any, [1, 0, 1])
+
+    target_dep = binary_target(df, subject_ids, diagnosis="SCID5_CV_Depression")
+    np.testing.assert_array_equal(target_dep, [1, 0, 0])
+
+
+def test_balanced_subject_ids_success(mock_data_environment):
+    chosen = balanced_subject_ids(mock_data_environment, n_subjects=4)
+    assert len(chosen) == 4
+    assert chosen == ["sub_01", "sub_02", "sub_03", "sub_04"]
+
+    chosen_random = balanced_subject_ids(mock_data_environment, n_subjects=2, random_state=42)
+    assert len(chosen_random) == 2
+
+
+def test_balanced_subject_ids_exceptions(mock_data_environment):
+    with pytest.raises(ValueError, match="n_subjects must be positive"):
+        balanced_subject_ids(mock_data_environment, n_subjects=0)
+
+    with pytest.raises(ValueError, match="n_subjects must be even"):
+        balanced_subject_ids(mock_data_environment, n_subjects=3)
+
+    with pytest.raises(ValueError, match="need at least"):
+        balanced_subject_ids(mock_data_environment, n_subjects=10)
+
+
+def test_load_subject(mock_data_environment):
+    rec, states = load_subject("sub_01", mock_data_environment)
+    assert rec.shape == (4, 100)
+    assert states.shape == (100,)
+
+import pytest
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
+
+from pcp_project._helpers import (
+    _declares_param,
+    _final_estimator_has,
+    _split_input,
+    _metadata_kwargs,
+    _transform_one,
+    _subject_collection,
+    _is_recording_pair,
+    _is_run_list,
+    _recording_pair,
+    _state_values,
+    _selected_runs,
+    _map_recording_pairs,
+    _window_subjects,
+)
+
+##########################################################################
+# Tests for Private Metadata-Routing & Helpers (_helpers.py)
+##########################################################################
+
+def test_declares_param():
+    def dummy_func(x, y, groups=None):
+        pass
+
+    assert _declares_param(dummy_func, "groups") is True
+    assert _declares_param(dummy_func, "z") is False
+
+def test_final_estimator_has():
+    class DummyPipeline:
+        def __init__(self, final):
+            self._final_estimator = final
+
+    pipe_none = DummyPipeline(None)
+    check_func = _final_estimator_has("predict")
+    with pytest.raises(AttributeError, match="The final step does not implement"):
+        check_func(pipe_none)
+
+    class DummyEstimator:
+        pass
+
+    pipe_no_method = DummyPipeline(DummyEstimator())
+    with pytest.raises(AttributeError, match="does not implement predict"):
+        check_func(pipe_no_method)
+
+    class ValidEstimator:
+        def predict(self):
+            pass
+
+    pipe_valid = DummyPipeline(ValidEstimator())
+    assert check_func(pipe_valid) is True
+
+def test_split_input():
+    X = np.ones((5, 10))
+    groups = np.array([1, 2, 3, 4, 5])
+
+    res_x, res_groups = _split_input((X, groups), default_mask=None)
+    np.testing.assert_array_equal(res_x, X)
+    np.testing.assert_array_equal(res_groups, groups)
+
+    res_x, res_groups = _split_input(X, default_mask=groups)
+    np.testing.assert_array_equal(res_x, X)
+    np.testing.assert_array_equal(res_groups, groups)
+
+def test_metadata_kwargs():
+    def method_with_y_and_groups(X, y, groups):
+        pass
+
+    def method_without_them(X):
+        pass
+
+    X = np.ones((5, 10))
+    y = np.arange(5)
+    groups = np.arange(5)
+
+    kwargs = _metadata_kwargs(method_with_y_and_groups, X, y, groups)
+    assert "y" in kwargs
+    assert "groups" in kwargs
+
+    kwargs_empty = _metadata_kwargs(method_without_them, X, y, groups)
+    assert kwargs_empty == {}
+
+    kwargs_mismatch = _metadata_kwargs(method_with_y_and_groups, X, np.arange(2), groups)
+    assert "y" not in kwargs_mismatch
+
+def test_transform_one():
+    class CustomTransformer(BaseEstimator, TransformerMixin):
+        def fit(self, X, y=None):
+            return self
+
+        def transform(self, X, y=None, groups=None):
+            if groups is not None:
+                return X, groups, "extra_meta"
+            return X
+
+    transformer = CustomTransformer()
+    X = np.ones((5, 10))
+    groups = np.arange(5)
+
+    res, out_groups = _transform_one(transformer, X, y=None, groups=groups)
+    np.testing.assert_array_equal(res, X)
+    np.testing.assert_array_equal(out_groups, groups)
+
+    class SimpleTransformer(BaseEstimator, TransformerMixin):
+        def transform(self, X):
+            return X
+
+    res_simple, out_groups_simple = _transform_one(SimpleTransformer(), X, y=None, groups=groups)
+    np.testing.assert_array_equal(res_simple, X)
+    np.testing.assert_array_equal(out_groups_simple, groups)
+
+def test_subject_collection():
+    recording = (np.ones((2, 10)), np.zeros(10))
+
+    assert _subject_collection([recording]) == [recording]
+
+    obj_arr = np.empty(1, dtype=object)
+    obj_arr[0] = recording
+    assert _subject_collection(obj_arr) == [recording]
+
+    assert _subject_collection("not_a_collection") is None
+    assert _subject_collection([123, "invalid_item"]) is None
+
+
+def test_selected_runs():
+    recording = np.arange(20).reshape(2, 10)
+    sample_states = np.repeat([0, 1], 5)
+    subject = (recording, sample_states)
+
+    runs = _selected_runs(subject, states=None)
+    assert len(runs) == 2
+    np.testing.assert_array_equal(runs[0][0], recording[:, :5])
+    np.testing.assert_array_equal(runs[1][0], recording[:, 5:])
+
+    runs_filtered = _selected_runs(subject, states="eyes_closed")
+    assert len(runs_filtered) == 1
+    np.testing.assert_array_equal(runs_filtered[0][1], np.ones(5))
+
+def test_map_recording_pairs():
+    recording1 = (np.ones((2, 5)), np.zeros(5))
+    recording2 = (np.ones((2, 5)), np.ones(5))
+    collection = [recording1, [recording2]]
+
+    def dummy_op(pair):
+        rec, states = pair
+        return rec + 1, states
+
+    mapped = _map_recording_pairs(collection, dummy_op)
+    assert len(mapped) == 2
+    np.testing.assert_array_equal(mapped[0][0], np.ones((2, 5)) + 1)
+    np.testing.assert_array_equal(mapped[1][0][0], np.ones((2, 5)) + 1)
+
+def test_window_subjects_with_valid_padding_filter():
+    class DummyWindow:
+        def __init__(self):
+            self.length = 10
+            self.padding_policy = "valid"
+
+        def transform(self, X, groups=None):
+            return np.ones((1, 2, self.length)), np.array([99])
+
+    window = DummyWindow()
+    short_run = (np.ones((2, 5)), np.zeros(5))
+    valid_run = (np.ones((2, 12)), np.zeros(12))
+
+    collection = [short_run, valid_run]
+
+    windows, (sub_ids, states) = _window_subjects(window, collection)
+
+    assert len(windows) == 1
+    np.testing.assert_array_equal(sub_ids, [1])
+    np.testing.assert_array_equal(states, [99])

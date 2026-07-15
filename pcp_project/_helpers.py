@@ -157,3 +157,4 @@ def _window_subjects(window, collection):
         np.concatenate(batches),
         (np.concatenate(subject_ids), np.concatenate(window_states)),
     )
+
