@@ -2,6 +2,9 @@
 
 import numpy as np
 import pytest
+import tempfile
+from pathlib import Path
+import pandas as pd
 from pyriemann.estimation import Covariances
 from sklearn.exceptions import NotFittedError
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -14,6 +17,28 @@ from pcp_project.estimators import (
     NotchFilter,
     SlidingWindow,
     StateSelector,
+)
+
+
+from pcp_project.data import (
+    load_labels,
+    list_subject_ids,
+    binary_target,
+    balanced_subject_ids,
+    load_subject,
+)
+
+
+from pcp_project._helpers import (
+    _declares_param,
+    _final_estimator_has,
+    _split_input,
+    _metadata_kwargs,
+    _transform_one,
+    _subject_collection,
+    _selected_runs,
+    _map_recording_pairs,
+    _window_subjects,
 )
 
 N_CHANNELS = 4
@@ -770,21 +795,9 @@ def test_sliding_window_validation(recording, subject_collection):
         StateSelector().fit_transform(numeric_list), numeric_list
     )
 
-
-import tempfile
-from pathlib import Path
-import pandas as pd
-import pytest
-import numpy as np
-
-from pcp_project.data import (
-    load_labels,
-    list_subject_ids,
-    binary_target,
-    balanced_subject_ids,
-    load_subject,
-)
-
+##########################################################################
+# Tests for data.py
+##########################################################################
 
 @pytest.fixture
 def mock_data_environment():
@@ -874,26 +887,6 @@ def test_load_subject(mock_data_environment):
     assert rec.shape == (4, 100)
     assert states.shape == (100,)
 
-
-import pytest
-import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin
-
-from pcp_project._helpers import (
-    _declares_param,
-    _final_estimator_has,
-    _split_input,
-    _metadata_kwargs,
-    _transform_one,
-    _subject_collection,
-    _is_recording_pair,
-    _is_run_list,
-    _recording_pair,
-    _state_values,
-    _selected_runs,
-    _map_recording_pairs,
-    _window_subjects,
-)
 
 ##########################################################################
 # Tests for Private Metadata-Routing & Helpers (_helpers.py)
