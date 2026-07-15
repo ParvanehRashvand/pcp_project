@@ -458,8 +458,6 @@ class StateSelector(BaseEstimator):
         """Fit the selector and transform while forwarding state metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
-    
-
 
 
 ###########################################################################################
@@ -764,7 +762,6 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
         covariance_method = self._COVARIANCE_METHODS[self.estimator]
         covmats = covariance_method(X_copied, assume_centered=self.assume_centered)
         return covmats[0] if type(covmats) is tuple else covmats
-
 
 
 ###########################################################################################

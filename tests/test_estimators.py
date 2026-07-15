@@ -669,6 +669,7 @@ def test_batch_covariances_accepts_tuple_input(estimator):
 # Tests of MeanProbabilityAggregator Class
 ##########################################################################
 
+
 def test_fit_sets_attribute():
     """Verify that fit sets the fitted_ attribute and returns self."""
     aggregator = MeanProbabilityAggregator()
@@ -813,6 +814,7 @@ def test_fit_transform_combines_steps():
     assert aggregator.fitted_ is True
     expected = np.array([15.0, 2.0])
     np.testing.assert_allclose(result, expected)
+
 
 ##########################################################################
 # Tests of SlidingWindow Class
