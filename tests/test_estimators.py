@@ -795,9 +795,11 @@ def test_sliding_window_validation(recording, subject_collection):
         StateSelector().fit_transform(numeric_list), numeric_list
     )
 
+
 ##########################################################################
 # Tests for data.py
 ##########################################################################
+
 
 @pytest.fixture
 def mock_data_environment():
