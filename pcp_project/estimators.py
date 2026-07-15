@@ -466,7 +466,33 @@ class StateSelector(BaseEstimator):
 # FIX(ref): Window collections one contiguous run at a time, align zero/edge
 # padding with labels, and return a bare window array when metadata is absent.
 class SlidingWindow(BaseEstimator, TransformerMixin):
-    """Split recordings into fixed-length windows."""
+    """Split recordings into fixed-length windows. 
+    
+    This transformer slices 2D EEG recordings of shape (n_channels, n_samples)
+    into 3D window arrays of shape (n_windows, n_channels, window_length).
+    
+    Parameters
+        ----------
+        length : int, default=200
+            The length of each window in data samples.
+        step_size : int, default=50
+            The sliding window step size in samples.
+        padding_policy : {"valid", "zero", "edge"}, default="valid"
+            The policy for padding incomplete trailing segments.
+                "valid": Discard trailing samples that do not form a complete window.
+                "zero": Pad with zeros up to the next valid window boundary.
+                "edge": Pads with the edge value of array.
+        label_strategy : {"majority", "last", "first"}, default="majority"
+            The method used to merge sample states into one window state.
+                "majority": Assign the label that occurs most frequently in the window.
+                "last": Assign the label of the final sample in the window.
+                "first": Assign the label of the starting sample in the window.
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    """
 
     def __init__(
         self,
@@ -481,7 +507,31 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         self.label_strategy = label_strategy
 
     def fit(self, X, y=None):
-        """Validate window, padding, and label-strategy parameters."""
+        """Validate window, padding, and label-strategy parameters.
+
+        This estimator is stateless and does not learn any parameters from the
+        training data during fitting. This method is provided to comply with the
+        scikit-learn.
+
+        Parameters
+        ----------
+        X : array-like or collection
+            EEG recording or subject collection. Ignored during fitting.
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+
+        Returns
+        -------
+        self : SlidingWindow
+            The fitted transformer instance.
+
+        Raises
+        ------
+        ValueError
+            If ``length`` or ``step_size`` is non-positive, or if ``padding_policy``
+            or ``label_strategy`` is set to an unsupported value.
+        """
+
         if self.length <= 0 or self.step_size <= 0:
             raise ValueError("Length and step_size must be positive integers.")
         if self.padding_policy not in ["valid", "zero", "edge"]:
@@ -493,7 +543,36 @@ class SlidingWindow(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Create windows and optional window-level metadata labels."""
+        """Create windows and optional window-level metadata labels.
+        
+        Parameters
+        ----------
+        X : array-like, tuple, or collection
+            EEG data. A single recording should have shape
+            (n_channels, n_samples). A tuple is interpreted as
+            (recording, groups).
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+        groups : array-like, default=None
+            State metadata (e.g., eye-state codes or strings) representing
+            the recording state of each time sample. 
+
+        Returns
+        -------
+        ndarray, tuple, or list
+            * If ``groups`` is None and input is a single array: returns a 3D ndarray 
+            of shape (n_windows, n_channels, window_length).
+            * If ``groups`` are present and input is a single array: returns a tuple 
+            of (X_windows, groups_windows).
+            * If input is a collection: returns lists of windowed segments sorted by subject index.
+
+        Raises
+        ------
+        ValueError
+            If the signal length is shorter than ``length`` and ``padding_policy``
+            is set to ``"valid"``.
+        
+        """
         check_is_fitted(self, "fitted_")
 
         collection = _subject_collection(X)
