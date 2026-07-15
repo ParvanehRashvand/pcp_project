@@ -7,7 +7,6 @@ from sklearn.exceptions import NotFittedError
 from sklearn.base import BaseEstimator, TransformerMixin
 
 
-
 from pcp_project.estimators import (
     BandPassFilter,
     BatchCovariances,
@@ -38,9 +37,11 @@ def subject_collection():
         (second, np.repeat([1, 0], 6)),
     ]
 
+
 ##########################################################################
 # Tests of StateSelector Class
 ##########################################################################
+
 
 def test_state_selector(recording, subject_collection):
     X, states = recording
@@ -97,6 +98,7 @@ def test_state_selector(recording, subject_collection):
     _, chosen = selector.transform((X, states), groups=alternate)
     np.testing.assert_array_equal(chosen, np.ones(N_SAMPLES // 2))
 
+
 # 10
 def test_state_selector_not_modify_input(recording):
     X, states = recording
@@ -105,12 +107,14 @@ def test_state_selector_not_modify_input(recording):
     _ = selector.fit_transform(X, groups=states)
     np.testing.assert_array_equal(X, original)
 
+
 # 11
 def test_state_selector_transform_before_fit_raises_error(recording):
     X, _ = recording
     selector = StateSelector([0])
     with pytest.raises((ValueError, AttributeError, NotFittedError)):
         selector.transform(X)
+
 
 # 12
 def test_state_selector_fit_returns_self(recording):
@@ -119,6 +123,7 @@ def test_state_selector_fit_returns_self(recording):
     result = selector.fit(X)
     assert result is selector
 
+
 # 13
 def test_state_selector_fitted_attribute_exists(recording):
     X, _ = recording
@@ -126,6 +131,7 @@ def test_state_selector_fitted_attribute_exists(recording):
     assert not hasattr(selector, "fitted_")
     selector.fit(X)
     assert hasattr(selector, "fitted_")
+
 
 # 14
 @pytest.mark.xfail(strict=False, reason="Some sklearn versions drop y in fit_transform")
@@ -149,9 +155,11 @@ def test_sklearn_transformer_mixin_bug_directly():
 
     assert transformer.y_received_in_transform is not None
 
+
 ##########################################################################
 # Tests of BandPassFilter Class
 ##########################################################################
+
 
 @pytest.fixture
 def eeg_signal():
@@ -401,9 +409,11 @@ def test_bandpass_preserves_frequency_inside_band():
 
     assert correlation > 0.95
 
+
 ##########################################################################
 # Tests of NotchFilter Class
 ##########################################################################
+
 
 def test_notch_output_properties(recording):
     X, _ = recording
@@ -480,7 +490,6 @@ def test_notch_filter(recording, monkeypatch):
     np.testing.assert_equal(NotchFilter(sfreq=32).fit_transform(X), X)
     all_nan = np.full_like(X, np.nan)
     np.testing.assert_equal(NotchFilter().fit_transform(all_nan), all_nan)
-
 
 
 ##########################################################################
@@ -635,6 +644,7 @@ def test_batch_covariances_accepts_tuple_input(estimator):
 # Tests of MeanProbabilityAggregator Class
 ##########################################################################
 
+
 def test_mean_probability_aggregator():
     values = np.arange(16, dtype=float).reshape(4, 2, 2)
     groups = np.array(["s2", "s1", "s2", "s1"])
@@ -652,9 +662,11 @@ def test_mean_probability_aggregator():
     with pytest.raises(ValueError, match="groups must be provided"):
         aggregator.transform(values)
 
+
 ##########################################################################
 # Tests of SlidingWindow Class
 ##########################################################################
+
 
 def test_sliding_window_basics():
     X = np.arange(8, dtype=float).reshape(2, 4)
@@ -758,6 +770,7 @@ def test_sliding_window_validation(recording, subject_collection):
         StateSelector().fit_transform(numeric_list), numeric_list
     )
 
+
 import tempfile
 from pathlib import Path
 import pandas as pd
@@ -802,7 +815,9 @@ def mock_data_environment():
         df.to_csv(tmp_path / "labels_reduced.csv", index=False)
 
         for sub_id in ["sub_01", "sub_02", "sub_03", "sub_04"]:
-            mock_x = np.random.randn(100, 4)  # shape (n_samples, n_channels) -> بعداً T می‌شود
+            mock_x = np.random.randn(
+                100, 4
+            )  # shape (n_samples, n_channels) -> بعداً T می‌شود
             mock_y = np.random.randint(0, 2, size=100)
             np.savez(tmp_path / f"{sub_id}.npz", X=mock_x, y=mock_y)
 
@@ -837,7 +852,9 @@ def test_balanced_subject_ids_success(mock_data_environment):
     assert len(chosen) == 4
     assert chosen == ["sub_01", "sub_02", "sub_03", "sub_04"]
 
-    chosen_random = balanced_subject_ids(mock_data_environment, n_subjects=2, random_state=42)
+    chosen_random = balanced_subject_ids(
+        mock_data_environment, n_subjects=2, random_state=42
+    )
     assert len(chosen_random) == 2
 
 
@@ -856,6 +873,7 @@ def test_load_subject(mock_data_environment):
     rec, states = load_subject("sub_01", mock_data_environment)
     assert rec.shape == (4, 100)
     assert states.shape == (100,)
+
 
 import pytest
 import numpy as np
@@ -881,12 +899,14 @@ from pcp_project._helpers import (
 # Tests for Private Metadata-Routing & Helpers (_helpers.py)
 ##########################################################################
 
+
 def test_declares_param():
     def dummy_func(x, y, groups=None):
         pass
 
     assert _declares_param(dummy_func, "groups") is True
     assert _declares_param(dummy_func, "z") is False
+
 
 def test_final_estimator_has():
     class DummyPipeline:
@@ -912,6 +932,7 @@ def test_final_estimator_has():
     pipe_valid = DummyPipeline(ValidEstimator())
     assert check_func(pipe_valid) is True
 
+
 def test_split_input():
     X = np.ones((5, 10))
     groups = np.array([1, 2, 3, 4, 5])
@@ -923,6 +944,7 @@ def test_split_input():
     res_x, res_groups = _split_input(X, default_mask=groups)
     np.testing.assert_array_equal(res_x, X)
     np.testing.assert_array_equal(res_groups, groups)
+
 
 def test_metadata_kwargs():
     def method_with_y_and_groups(X, y, groups):
@@ -942,8 +964,11 @@ def test_metadata_kwargs():
     kwargs_empty = _metadata_kwargs(method_without_them, X, y, groups)
     assert kwargs_empty == {}
 
-    kwargs_mismatch = _metadata_kwargs(method_with_y_and_groups, X, np.arange(2), groups)
+    kwargs_mismatch = _metadata_kwargs(
+        method_with_y_and_groups, X, np.arange(2), groups
+    )
     assert "y" not in kwargs_mismatch
+
 
 def test_transform_one():
     class CustomTransformer(BaseEstimator, TransformerMixin):
@@ -967,9 +992,12 @@ def test_transform_one():
         def transform(self, X):
             return X
 
-    res_simple, out_groups_simple = _transform_one(SimpleTransformer(), X, y=None, groups=groups)
+    res_simple, out_groups_simple = _transform_one(
+        SimpleTransformer(), X, y=None, groups=groups
+    )
     np.testing.assert_array_equal(res_simple, X)
     np.testing.assert_array_equal(out_groups_simple, groups)
+
 
 def test_subject_collection():
     recording = (np.ones((2, 10)), np.zeros(10))
@@ -998,6 +1026,7 @@ def test_selected_runs():
     assert len(runs_filtered) == 1
     np.testing.assert_array_equal(runs_filtered[0][1], np.ones(5))
 
+
 def test_map_recording_pairs():
     recording1 = (np.ones((2, 5)), np.zeros(5))
     recording2 = (np.ones((2, 5)), np.ones(5))
@@ -1011,6 +1040,7 @@ def test_map_recording_pairs():
     assert len(mapped) == 2
     np.testing.assert_array_equal(mapped[0][0], np.ones((2, 5)) + 1)
     np.testing.assert_array_equal(mapped[1][0][0], np.ones((2, 5)) + 1)
+
 
 def test_window_subjects_with_valid_padding_filter():
     class DummyWindow:

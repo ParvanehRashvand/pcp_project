@@ -31,6 +31,7 @@ _state_values = _helpers._state_values
 # BandPassFilter
 ###########################################################################################
 
+
 # FIX(ref): Support direct array-like recordings and subject/run collections
 # while preserving bare-array versus metadata-pair returns, including all-NaN.
 class BandPassFilter(BaseEstimator, TransformerMixin):
@@ -161,6 +162,7 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
         """Fit and filter while forwarding recording metadata."""
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
+
 
 ###########################################################################################
 # NotchFilter
@@ -312,9 +314,11 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
+
 ###########################################################################################
 # StateSelector
 ###########################################################################################
+
 
 class StateSelector(BaseEstimator):
     """Select specific recording states from EEG signals.
@@ -354,6 +358,7 @@ class StateSelector(BaseEstimator):
     >>> print(g_sel)
     [1 1]
     """
+
     def __init__(self, states=None):
         self.states = states
 
@@ -454,9 +459,11 @@ class StateSelector(BaseEstimator):
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
 
+
 ###########################################################################################
 # BatchCovariances
 ###########################################################################################
+
 
 def batch_empirical_covariance(X, assume_centered):
     """Compute the empirical covariance of several matrices.
@@ -653,6 +660,7 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
         covmats = covariance_method(X_copied, assume_centered=self.assume_centered)
         return covmats[0] if type(covmats) is tuple else covmats
 
+
 ###########################################################################################
 # MeanProbabilityAggregator
 ###########################################################################################
@@ -696,6 +704,7 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
         """Fit and aggregate while forwarding subject metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
+
 
 ###########################################################################################
 # SlidingWindow
