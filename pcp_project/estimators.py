@@ -773,40 +773,182 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
 # FIX(ref): Unpack tuple metadata before conversion, preserve trailing axes and
 # first-seen subject order, and forward groups through fit_transform.
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
-    """Average aligned window-level values within each subject."""
+    """Aggregate window-level probabilities into one prediction per subject.
 
-    def __init__(self):
-        pass
+    Designed for the case where a single call handles windows from
+    *multiple* subjects at once (e.g. an entire held-out test set). Each
+    window's prediction is averaged together with every other window
+    belonging to the same subject, and the result is returned as either
+    a probability vector or a thresholded binary label vector, with one
+    entry per subject.
+
+    Parameters
+    ----------
+    threshold : float, default=0.5
+        Decision threshold applied to the mean probability when producing
+        binary labels via ``predict``.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        Set to True after ``fit`` is called. This estimator is stateless
+        (it has nothing to learn from training data), so ``fit`` only
+        marks readiness for ``predict`` / ``predict_proba`` / ``transform``.
+    """
+
+    def __init__(self, threshold=0.5):
+        self.threshold = threshold
 
     def fit(self, X, y=None):
-        """Mark the stateless aggregator as fitted."""
+        """Mark the stateless aggregator as fitted.
+
+        Parameters
+        ----------
+        X : array-like
+            Ignored. Present for sklearn API compatibility.
+        y : array-like, default=None
+            Ignored. Present for sklearn API compatibility.
+
+        Returns
+        -------
+        self : MeanProbabilityAggregator
+        """
         self.fitted_ = True
         return self
 
-    def transform(self, X, y=None, groups=None):
-        """Return one mean probability array per subject in first-seen order."""
-        check_is_fitted(self, "fitted_")
+    def _aggregate(self, X, groups):
+        """Average window-level values within each subject.
 
+        Parameters
+        ----------
+        X : array-like of shape (n_windows,) or (n_windows, n_classes)
+            Window-level predictions, possibly from multiple subjects
+            stacked together.
+        groups : array-like of shape (n_windows,)
+            Subject identifier for each row of ``X``. Rows sharing the
+            same identifier are averaged together.
+
+        Returns
+        -------
+        ndarray of shape (n_subjects,) or (n_subjects, n_classes)
+            One averaged row per subject, ordered by first appearance
+            of that subject's identifier in ``groups``.
+        """
         if isinstance(X, tuple):
+            # Allows groups to travel bundled with X (e.g. (X, groups))
+            # through call sites, such as a plain Pipeline.transform(X),
+            # that have no dedicated channel for extra metadata.
             if len(X) > 1 and groups is None:
                 groups = X[1]
             X = X[0]
+
         X = np.asarray(X, dtype=float)
 
         if groups is None:
-            raise ValueError("groups must be provided to aggregate per subject")
-
+            raise ValueError(
+                "groups must be provided to aggregate per subject "
+                "(one identifier per row of X)"
+            )
         groups = np.asarray(groups)
+
+        # first_indices[i]: position where the i-th sorted-unique label
+        # first appears in `groups`. inverse[j]: which sorted-unique
+        # label row j of X belongs to.
         _, first_indices, inverse = np.unique(
             groups, return_index=True, return_inverse=True
         )
+        # Reorder sorted-unique label indices by first appearance, so
+        # subjects come out in the order they first showed up in the
+        # data rather than alphabetically.
         ordered_groups = np.argsort(first_indices)
+
         aggregated = np.array(
             [X[inverse == group].mean(axis=0) for group in ordered_groups]
         )
         return aggregated
 
+    def predict_proba(self, X, groups=None):
+        """Return the mean probability vector for each subject.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_windows,) or (n_windows, n_classes), \
+                or tuple (X, groups)
+            Window-level predictions, possibly spanning multiple subjects.
+        groups : array-like of shape (n_windows,), default=None
+            Subject identifier for each row of ``X``. Required unless
+            bundled into ``X`` as a tuple.
+
+        Returns
+        -------
+        ndarray of shape (n_subjects,) or (n_subjects, n_classes)
+            Mean probability per subject, ordered by first appearance.
+        """
+        check_is_fitted(self, "fitted_")
+        return self._aggregate(X, groups)
+
+    def predict(self, X, groups=None):
+        """Return the binary label vector for each subject.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_windows,) or (n_windows, n_classes), \
+                or tuple (X, groups)
+            Window-level predictions, possibly spanning multiple subjects.
+        groups : array-like of shape (n_windows,), default=None
+            Subject identifier for each row of ``X``. Required unless
+            bundled into ``X`` as a tuple.
+
+        Returns
+        -------
+        ndarray of shape (n_subjects,) or (n_subjects, n_classes)
+            1 where the mean probability meets or exceeds ``threshold``,
+            else 0. One entry per subject, ordered by first appearance.
+        """
+        probabilities = self.predict_proba(X, groups=groups)
+        return (probabilities >= self.threshold).astype(int)
+
+    def transform(self, X, y=None, groups=None):
+        """Alias for ``predict_proba``, for use inside sklearn Pipelines.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_windows,) or (n_windows, n_classes), \
+                or tuple (X, groups)
+            Window-level predictions, possibly spanning multiple subjects.
+        y : array-like, default=None
+            Ignored. Present for sklearn API compatibility.
+        groups : array-like of shape (n_windows,), default=None
+            Subject identifier for each row of ``X``. Required unless
+            bundled into ``X`` as a tuple.
+
+        Returns
+        -------
+        ndarray of shape (n_subjects,) or (n_subjects, n_classes)
+            Mean probability per subject, ordered by first appearance.
+        """
+        return self.predict_proba(X, groups=groups)
+
     def fit_transform(self, X, y=None, groups=None, **fit_params):
-        """Fit and aggregate while forwarding subject metadata."""
+        """Fit (no-op) and aggregate in one call, forwarding ``groups``.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_windows,) or (n_windows, n_classes), \
+                or tuple (X, groups)
+            Window-level predictions, possibly spanning multiple subjects.
+        y : array-like, default=None
+            Ignored. Present for sklearn API compatibility.
+        groups : array-like of shape (n_windows,), default=None
+            Subject identifier for each row of ``X``. Required unless
+            bundled into ``X`` as a tuple.
+        **fit_params : dict
+            Ignored. Accepted for sklearn Pipeline compatibility.
+
+        Returns
+        -------
+        ndarray of shape (n_subjects,) or (n_subjects, n_classes)
+            Mean probability per subject, ordered by first appearance.
+        """
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
