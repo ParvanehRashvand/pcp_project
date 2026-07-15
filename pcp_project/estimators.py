@@ -27,6 +27,9 @@ _is_run_list = _helpers._is_run_list
 _recording_pair = _helpers._recording_pair
 _state_values = _helpers._state_values
 
+###########################################################################################
+# BandPassFilter
+###########################################################################################
 
 # FIX(ref): Support direct array-like recordings and subject/run collections
 # while preserving bare-array versus metadata-pair returns, including all-NaN.
@@ -159,11 +162,55 @@ class BandPassFilter(BaseEstimator, TransformerMixin):
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
-
+###########################################################################################
+# NotchFilter
+###########################################################################################
 # FIX(ref): Keep usable notch frequencies and matching widths, skip empty MNE
 # calls, and preserve bare-array versus metadata-pair returns.
 class NotchFilter(BaseEstimator, TransformerMixin):
-    """Remove line-noise frequencies with MNE's notch filter."""
+    """Remove line-noise frequencies with MNE's notch filter.
+
+    This filter applies a notch filter to eliminate power line noise or specific
+    interference frequencies (e.g., 50 Hz or 60 Hz). It handles missing values
+    (NaNs), filters out invalid frequencies above the Nyquist limit, and preserves
+    sample-level metadata if provided.
+
+    Parameters
+    ----------
+    freqs : float or list of float, default=50.0
+        Frequencies to attenuate.
+    sfreq : float, default=256.0
+        Sampling frequency of the EEG signal in Hz.
+    notch_widths : float or array-like, optional
+        Width of each notch. If None, MNE's default width is used.
+    n_jobs : int, optional
+        Number of jobs to run in parallel.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Create a dummy EEG signal with 2 channels and 2000 samples
+    >>> # Channel 0 has a simulated 50 Hz sine wave
+    >>> sfreq = 256.0
+    >>> n_samples = 2000
+    >>> t = np.arange(n_samples) / sfreq
+    >>> signal_50hz = np.sin(2 * np.pi * 50 * t)
+    >>> X = np.vstack([signal_50hz, np.zeros(n_samples)])
+    >>> groups = np.zeros(n_samples, dtype=int)
+    >>> groups[n_samples // 2:] = 1  # Half eye-closed, half eye-open
+    >>>
+    >>> # Initialize and run the NotchFilter
+    >>> filter_50 = NotchFilter(freqs=50.0, sfreq=sfreq)
+    >>> X_filtered, out_groups = filter_50.fit_transform(X, groups=groups)
+    >>>
+    >>> # The shape of the output signal remains unchanged
+    >>> X_filtered.shape
+    (2, 2000)
+    >>>
+    >>> # Metadata groups are successfully forwarded
+    >>> np.array_equal(out_groups, groups)
+    True
+    """
 
     def __init__(self, freqs=50.0, sfreq=256.0, notch_widths=None, n_jobs=None):
         self.freqs = freqs
@@ -172,12 +219,53 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.n_jobs = n_jobs
 
     def fit(self, X, y=None, groups=None):
-        """Mark the stateless filter as fitted."""
+        """Mark the filter as fitted.
+
+        The notch filter is stateless and does not learn parameters from
+        the data. This method exists for scikit-learn compatibility.
+
+        Parameters
+        ----------
+        X : array-like
+            EEG recording. Ignored during fitting.
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+        groups : array-like, default=None
+            Optional metadata. Ignored during fitting.
+
+        Returns
+        -------
+        self : NotchFilter
+            The fitted transformer.
+        """
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Filter one recording and preserve optional sample metadata."""
+        """Apply the notch filter to EEG data.
+
+        The input can be a single EEG recording, a collection of subject
+        recordings, or a tuple ``(X, groups)``. Metadata in ``groups`` is preserved
+        and returned unchanged. NaNs (missing values) in the signal are handled
+        gracefully and restored in the final filtered output.
+
+        Parameters
+        ----------
+        X : array-like, tuple, or collection
+            EEG data. A single recording should have shape
+            ``(n_channels, n_samples)``. A tuple is interpreted as
+            ``(recording, groups)``.
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+        groups : array-like, default=None
+            Optional metadata such as sample states.
+
+        Returns
+        -------
+        ndarray or tuple or collection
+            Filtered EEG data with the same structure as the input. If metadata is
+            provided, the output is returned as ``(X_filtered, groups)``.
+        """
         check_is_fitted(self, "fitted_")
 
         if isinstance(X, tuple):
@@ -193,11 +281,13 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         freqs_array = np.asarray(np.atleast_1d(self.freqs), dtype=float)
         usable = freqs_array < self.sfreq / 2
         freqs_array = freqs_array[usable]
+
         notch_widths = self.notch_widths
         if notch_widths is not None:
             notch_widths = np.asarray(np.atleast_1d(notch_widths), dtype=float)
             if len(notch_widths) == len(usable):
                 notch_widths = notch_widths[usable]
+
         if X_valid.shape[1] == 0 or len(freqs_array) == 0:
             return X_copied.copy() if groups is None else (X_copied.copy(), groups)
 
@@ -222,20 +312,106 @@ class NotchFilter(BaseEstimator, TransformerMixin):
         self.fit(X, y, groups=groups)
         return self.transform(X, y, groups=groups)
 
+###########################################################################################
+# StateSelector
+###########################################################################################
 
 class StateSelector(BaseEstimator):
-    """Keep selected recording states without joining separate state runs."""
+    """Select specific recording states from EEG signals.
 
+    This estimator filters EEG timepoints or contiguous runs based on the
+    requested states. It supports both single-subject arrays and multi-subject
+    collections (lists of runs) while preserving recording boundaries.
+
+    Parameters
+    ----------
+    states : list, str, int or None, default=None
+        The recording states to retain. Can be numeric codes (e.g., 1) or
+        their corresponding string names (e.g., 'eyes_closed').
+        If None, all states are kept.
+
+    Attributes
+    ----------
+    fitted_ : bool
+        True after fit() has been called.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Create a dummy EEG signal with 2 channels and 5 samples
+    >>> X = np.array([[1.0, 2.0, 3.0, 4.0, 5.0],
+    ...               [6.0, 7.0, 8.0, 9.0, 10.0]])
+    >>> # Eye states for these 5 samples (0: open, 1: closed)
+    >>> groups = np.array([0, 0, 1, 1, 0])
+    >>> # Select times when eyes are closed (code 1)
+    >>> selector = StateSelector(states=[1])
+    >>> selector.fit(X)
+    StateSelector(states=[1])
+    >>> X_sel, g_sel = selector.transform(X, groups=groups)
+    >>> print(X_sel)
+    [[3. 4.]
+     [8. 9.]]
+    >>> print(g_sel)
+    [1 1]
+    """
     def __init__(self, states=None):
         self.states = states
 
     def fit(self, X, y=None):
-        """Validate no data-dependent parameters and mark the selector fitted."""
+        """Mark the state selector as fitted.
+
+        This estimator is stateless and does not learn any parameters from the
+        training data during fitting. This method is provided to comply with the
+        scikit-learn transformer API.
+
+        Parameters
+        ----------
+        X : array-like or collection
+            EEG data. Ignored during fitting.
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+
+        Returns
+        -------
+        self : StateSelector
+            The fitted transformer.
+        """
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None, groups=None):
-        """Select samples or contiguous runs matching ``states``."""
+        """Select times or runs matching the target states.
+
+        This method extracts only those EEG timepoints where the recording state
+        matches the configured interest. If a collection of multi-subject runs
+        is passed, each run is processed individually. If a tuple ``(X, groups)``
+        is provided, metadata is unpacked and sliced synchronously with the data.
+
+        Parameters
+        ----------
+        X : array-like, tuple, or collection
+            EEG data. A single recording should have shape
+            ``(n_channels, n_samples)``. A tuple is interpreted as
+            ``(recording, groups)``.
+        y : None, default=None
+            Ignored. Present for scikit-learn compatibility.
+        groups : array-like, default=None
+            State metadata (e.g., eye-state codes or strings) representing
+            the recording state of each time sample. Required if target states
+            are selected.
+
+        Returns
+        -------
+        ndarray or tuple or list
+            Selected EEG samples. If input is a collection, returns a list of
+            filtered runs. If metadata is provided, returns ``(X_selected, groups_selected)``.
+
+        Raises
+        ------
+        ValueError
+            If specific target states are requested but `groups` metadata is not
+            provided.
+        """
         check_is_fitted(self, "fitted_")
 
         # FIX(ref): Select collections run by run so disjoint states and
@@ -278,6 +454,9 @@ class StateSelector(BaseEstimator):
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
 
+###########################################################################################
+# BatchCovariances
+###########################################################################################
 
 def batch_empirical_covariance(X, assume_centered):
     """Compute the empirical covariance of several matrices.
@@ -474,7 +653,9 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
         covmats = covariance_method(X_copied, assume_centered=self.assume_centered)
         return covmats[0] if type(covmats) is tuple else covmats
 
-
+###########################################################################################
+# MeanProbabilityAggregator
+###########################################################################################
 # FIX(ref): Unpack tuple metadata before conversion, preserve trailing axes and
 # first-seen subject order, and forward groups through fit_transform.
 class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
@@ -516,7 +697,9 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
 
-
+###########################################################################################
+# SlidingWindow
+###########################################################################################
 # FIX(ref): Window collections one contiguous run at a time, align zero/edge
 # padding with labels, and return a bare window array when metadata is absent.
 class SlidingWindow(BaseEstimator, TransformerMixin):
