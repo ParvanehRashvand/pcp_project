@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 from pyriemann.estimation import Covariances
 from sklearn.exceptions import NotFittedError
+from sklearn.base import BaseEstimator, TransformerMixin
+
 
 
 from pcp_project.estimators import (
@@ -36,36 +38,48 @@ def subject_collection():
         (second, np.repeat([1, 0], 6)),
     ]
 
+##########################################################################
+# Tests of StateSelector Class
+##########################################################################
 
 def test_state_selector(recording, subject_collection):
     X, states = recording
+
+    # 1
     selected, selected_states = StateSelector("eyes_closed").fit_transform(
         X, groups=states
     )
     assert selected.shape == (N_CHANNELS, N_SAMPLES // 2)
     np.testing.assert_array_equal(selected_states, np.ones(N_SAMPLES // 2))
 
+    # 2
     named_states = np.where(states == 0, "eyes_open", "eyes_closed")
     _, selected_names = StateSelector("eyes_closed").fit_transform(
         X, groups=named_states
     )
     assert set(selected_names) == {"eyes_closed"}
 
+    # 3
     np.testing.assert_array_equal(StateSelector().fit_transform(X), X)
     unchanged, unchanged_states = StateSelector().fit_transform((X, states))
     np.testing.assert_array_equal(unchanged, X)
     np.testing.assert_array_equal(unchanged_states, states)
 
+    # 4
     object_array = np.empty(2, dtype=object)
     object_array[:] = subject_collection
     runs = StateSelector([0]).fit_transform(object_array)
     assert [len(subject_runs) for subject_runs in runs] == [2, 1]
+
+    # 5
     np.testing.assert_array_equal(runs[0][0][0][0], [0, 1, 2, 3])
     np.testing.assert_array_equal(runs[0][1][0][0], [8, 9, 10, 11])
 
+    # 6
     all_runs = StateSelector([0, 1]).fit_transform(subject_collection)
     assert [int(run_states[0]) for _, run_states in all_runs[0]] == [0, 1, 0]
 
+    # 7
     one_sample, one_state = StateSelector([1]).fit_transform(
         np.ones((2, 1)),
         groups=np.array([1]),
@@ -73,14 +87,71 @@ def test_state_selector(recording, subject_collection):
     assert one_sample.shape == (2, 1)
     np.testing.assert_array_equal(one_state, [1])
 
+    # 8
     selector = StateSelector([1]).fit(X)
     with pytest.raises(ValueError, match="groups are required"):
         selector.transform(X)
 
+    # 9
     alternate = 1 - states
     _, chosen = selector.transform((X, states), groups=alternate)
     np.testing.assert_array_equal(chosen, np.ones(N_SAMPLES // 2))
 
+# 10
+def test_state_selector_not_modify_input(recording):
+    X, states = recording
+    original = X.copy()
+    selector = StateSelector([0])
+    _ = selector.fit_transform(X, groups=states)
+    np.testing.assert_array_equal(X, original)
+
+# 11
+def test_state_selector_transform_before_fit_raises_error(recording):
+    X, _ = recording
+    selector = StateSelector([0])
+    with pytest.raises((ValueError, AttributeError, NotFittedError)):
+        selector.transform(X)
+
+# 12
+def test_state_selector_fit_returns_self(recording):
+    X, _ = recording
+    selector = StateSelector([0])
+    result = selector.fit(X)
+    assert result is selector
+
+# 13
+def test_state_selector_fitted_attribute_exists(recording):
+    X, _ = recording
+    selector = StateSelector([0])
+    assert not hasattr(selector, "fitted_")
+    selector.fit(X)
+    assert hasattr(selector, "fitted_")
+
+# 14
+@pytest.mark.xfail(strict=False, reason="Some sklearn versions drop y in fit_transform")
+def test_sklearn_transformer_mixin_bug_directly():
+    class BuggyTransformer(BaseEstimator, TransformerMixin):
+        def __init__(self):
+            self.y_received_in_transform = None
+
+        def fit(self, X, y=None):
+            return self
+
+        def transform(self, X, y=None):
+            self.y_received_in_transform = y
+            return X
+
+    X = np.zeros((5, 5))
+    y = np.array([1, 2, 3, 4, 5])
+
+    transformer = BuggyTransformer()
+    transformer.fit_transform(X, y=y)
+
+    assert transformer.y_received_in_transform is not None
+
+##########################################################################
+# Tests of BandPassFilter Class
+##########################################################################
 
 @pytest.fixture
 def eeg_signal():
@@ -330,6 +401,50 @@ def test_bandpass_preserves_frequency_inside_band():
 
     assert correlation > 0.95
 
+##########################################################################
+# Tests of NotchFilter Class
+##########################################################################
+
+def test_notch_output_properties(recording):
+    X, _ = recording
+    filt = NotchFilter(freqs=50.0)
+    result = filt.fit_transform(X)
+    assert result.shape == X.shape
+    assert result.dtype == np.float64
+
+
+def test_notch_fit_lifecycle(recording):
+    X, _ = recording
+    filt = NotchFilter(freqs=50.0)
+    result = filt.fit(X)
+    assert result is filt
+    assert hasattr(filt, "fitted_")
+
+
+def test_notch_does_not_modify_input(recording):
+    X, _ = recording
+    original = X.copy()
+    filt = NotchFilter(freqs=50.0)
+    _ = filt.fit_transform(X)
+    np.testing.assert_array_equal(X, original)
+
+
+def test_notch_transform_before_fit_raises_error(recording):
+    X, _ = recording
+    filt = NotchFilter(freqs=50.0)
+    with pytest.raises(Exception):
+        filt.transform(X)
+
+
+def test_notch_removes_frequency():
+    sfreq = 250.0
+    t = np.arange(0, 15, 1 / sfreq)
+    pure_50hz = np.sin(2 * np.pi * 50 * t).reshape(1, -1)
+
+    filt = NotchFilter(freqs=50.0, sfreq=sfreq)
+    filtered = filt.fit_transform(pure_50hz)
+    assert np.var(filtered) < 0.05 * np.var(pure_50hz)
+
 
 def test_notch_filter(recording, monkeypatch):
     X, states = recording
@@ -342,27 +457,35 @@ def test_notch_filter(recording, monkeypatch):
         return values + 1
 
     monkeypatch.setattr("pcp_project.estimators.mne.filter.notch_filter", fake_notch)
+    # 1
     filtered, output_states = NotchFilter(
         freqs=[50, 200], notch_widths=[2, 8]
     ).fit_transform(X, groups=states)
     np.testing.assert_allclose(filtered[:, :-2], X[:, :-2] + 1)
     assert np.isnan(filtered[:, -2:]).all()
+    # 2
     np.testing.assert_array_equal(output_states, states)
     np.testing.assert_array_equal(calls[0]["freqs"], [50])
     np.testing.assert_array_equal(calls[0]["notch_widths"], [2])
-
+    # 3
     _, tuple_states = NotchFilter().fit_transform((X, states))
     np.testing.assert_array_equal(tuple_states, states)
     alternate_states = 1 - states
     _, output_states = NotchFilter().fit_transform((X, states), groups=alternate_states)
     np.testing.assert_array_equal(output_states, alternate_states)
-
+    # 4
     NotchFilter(freqs=[50, 100], notch_widths=2).fit_transform(X)
     np.testing.assert_array_equal(calls[-1]["notch_widths"], [2])
 
     np.testing.assert_equal(NotchFilter(sfreq=32).fit_transform(X), X)
     all_nan = np.full_like(X, np.nan)
     np.testing.assert_equal(NotchFilter().fit_transform(all_nan), all_nan)
+
+
+
+##########################################################################
+# Tests of BatchCovariances Class
+##########################################################################
 
 
 def assert_matches_pyriemann(
@@ -508,6 +631,10 @@ def test_batch_covariances_accepts_tuple_input(estimator):
     assert np.allclose(ours_tuple, ours_array)
 
 
+##########################################################################
+# Tests of MeanProbabilityAggregator Class
+##########################################################################
+
 def test_mean_probability_aggregator():
     values = np.arange(16, dtype=float).reshape(4, 2, 2)
     groups = np.array(["s2", "s1", "s2", "s1"])
@@ -525,6 +652,9 @@ def test_mean_probability_aggregator():
     with pytest.raises(ValueError, match="groups must be provided"):
         aggregator.transform(values)
 
+##########################################################################
+# Tests of SlidingWindow Class
+##########################################################################
 
 def test_sliding_window_basics():
     X = np.arange(8, dtype=float).reshape(2, 4)
