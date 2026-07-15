@@ -458,6 +458,111 @@ class StateSelector(BaseEstimator):
         """Fit the selector and transform while forwarding state metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
+    
+
+
+
+###########################################################################################
+# SlidingWindow
+###########################################################################################
+# FIX(ref): Window collections one contiguous run at a time, align zero/edge
+# padding with labels, and return a bare window array when metadata is absent.
+class SlidingWindow(BaseEstimator, TransformerMixin):
+    """Split recordings into fixed-length windows."""
+
+    def __init__(
+        self,
+        length=200,
+        step_size=50,
+        padding_policy="valid",
+        label_strategy="majority",
+    ):
+        self.length = length
+        self.step_size = step_size
+        self.padding_policy = padding_policy
+        self.label_strategy = label_strategy
+
+    def fit(self, X, y=None):
+        """Validate window, padding, and label-strategy parameters."""
+        if self.length <= 0 or self.step_size <= 0:
+            raise ValueError("Length and step_size must be positive integers.")
+        if self.padding_policy not in ["valid", "zero", "edge"]:
+            raise ValueError(f"Unknown padding_policy: {self.padding_policy}")
+        if self.label_strategy not in ["majority", "last", "first"]:
+            raise ValueError(f"Unknown label_strategy: {self.label_strategy}")
+
+        self.fitted_ = True
+        return self
+
+    def transform(self, X, y=None, groups=None):
+        """Create windows and optional window-level metadata labels."""
+        check_is_fitted(self, "fitted_")
+
+        collection = _subject_collection(X)
+        if collection is not None:
+            return _window_subjects(self, collection)
+
+        if isinstance(X, tuple):
+            if len(X) > 1 and groups is None:
+                groups = X[1]
+            X = X[0]
+
+        n_channels, n_samples = X.shape
+        groups_arr = None if groups is None else np.asarray(groups)
+
+        if n_samples < self.length and self.padding_policy == "valid":
+            raise ValueError(
+                f"Data length ({n_samples}) is shorter than window length "
+                f"({self.length})."
+            )
+
+        remainder = (n_samples - self.length) % self.step_size
+
+        if (
+            n_samples < self.length or remainder != 0
+        ) and self.padding_policy != "valid":
+            pad_size = (
+                self.length - n_samples
+                if n_samples < self.length
+                else self.step_size - remainder
+            )
+            if self.padding_policy == "zero":
+                X = np.pad(
+                    X,
+                    ((0, 0), (0, pad_size)),
+                    mode="constant",
+                    constant_values=0,
+                )
+            else:
+                X = np.pad(X, ((0, 0), (0, pad_size)), mode="edge")
+            if groups_arr is not None:
+                groups_arr = np.pad(groups_arr, (0, pad_size), mode="edge")
+            n_samples = X.shape[1]
+
+        start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
+        indexer = start_idx[:, None] + np.arange(self.length)
+        X_windows = X[:, indexer].transpose(1, 0, 2)
+
+        if groups_arr is None:
+            return X_windows
+
+        n_windows = len(start_idx)
+        groups_windows = np.empty(n_windows, dtype=groups_arr.dtype)
+        for i, start in enumerate(start_idx):
+            w_groups = groups_arr[start : start + self.length]
+            if self.label_strategy == "majority":
+                vals, counts = np.unique(w_groups, return_counts=True)
+                groups_windows[i] = vals[np.argmax(counts)]
+            elif self.label_strategy == "last":
+                groups_windows[i] = w_groups[-1]
+            else:
+                groups_windows[i] = w_groups[0]
+        return X_windows, groups_windows
+
+    def fit_transform(self, X, y=None, groups=None, **fit_params):
+        """Fit and create windows while forwarding sample metadata."""
+        self.fit(X, y)
+        return self.transform(X, y, groups=groups)
 
 
 ###########################################################################################
@@ -661,6 +766,7 @@ class BatchCovariances(BaseEstimator, TransformerMixin):
         return covmats[0] if type(covmats) is tuple else covmats
 
 
+
 ###########################################################################################
 # MeanProbabilityAggregator
 ###########################################################################################
@@ -702,108 +808,5 @@ class MeanProbabilityAggregator(BaseEstimator, TransformerMixin):
 
     def fit_transform(self, X, y=None, groups=None, **fit_params):
         """Fit and aggregate while forwarding subject metadata."""
-        self.fit(X, y)
-        return self.transform(X, y, groups=groups)
-
-
-###########################################################################################
-# SlidingWindow
-###########################################################################################
-# FIX(ref): Window collections one contiguous run at a time, align zero/edge
-# padding with labels, and return a bare window array when metadata is absent.
-class SlidingWindow(BaseEstimator, TransformerMixin):
-    """Split recordings into fixed-length windows."""
-
-    def __init__(
-        self,
-        length=200,
-        step_size=50,
-        padding_policy="valid",
-        label_strategy="majority",
-    ):
-        self.length = length
-        self.step_size = step_size
-        self.padding_policy = padding_policy
-        self.label_strategy = label_strategy
-
-    def fit(self, X, y=None):
-        """Validate window, padding, and label-strategy parameters."""
-        if self.length <= 0 or self.step_size <= 0:
-            raise ValueError("Length and step_size must be positive integers.")
-        if self.padding_policy not in ["valid", "zero", "edge"]:
-            raise ValueError(f"Unknown padding_policy: {self.padding_policy}")
-        if self.label_strategy not in ["majority", "last", "first"]:
-            raise ValueError(f"Unknown label_strategy: {self.label_strategy}")
-
-        self.fitted_ = True
-        return self
-
-    def transform(self, X, y=None, groups=None):
-        """Create windows and optional window-level metadata labels."""
-        check_is_fitted(self, "fitted_")
-
-        collection = _subject_collection(X)
-        if collection is not None:
-            return _window_subjects(self, collection)
-
-        if isinstance(X, tuple):
-            if len(X) > 1 and groups is None:
-                groups = X[1]
-            X = X[0]
-
-        n_channels, n_samples = X.shape
-        groups_arr = None if groups is None else np.asarray(groups)
-
-        if n_samples < self.length and self.padding_policy == "valid":
-            raise ValueError(
-                f"Data length ({n_samples}) is shorter than window length "
-                f"({self.length})."
-            )
-
-        remainder = (n_samples - self.length) % self.step_size
-
-        if (
-            n_samples < self.length or remainder != 0
-        ) and self.padding_policy != "valid":
-            pad_size = (
-                self.length - n_samples
-                if n_samples < self.length
-                else self.step_size - remainder
-            )
-            if self.padding_policy == "zero":
-                X = np.pad(
-                    X,
-                    ((0, 0), (0, pad_size)),
-                    mode="constant",
-                    constant_values=0,
-                )
-            else:
-                X = np.pad(X, ((0, 0), (0, pad_size)), mode="edge")
-            if groups_arr is not None:
-                groups_arr = np.pad(groups_arr, (0, pad_size), mode="edge")
-            n_samples = X.shape[1]
-
-        start_idx = np.arange(0, n_samples - self.length + 1, self.step_size)
-        indexer = start_idx[:, None] + np.arange(self.length)
-        X_windows = X[:, indexer].transpose(1, 0, 2)
-
-        if groups_arr is None:
-            return X_windows
-
-        n_windows = len(start_idx)
-        groups_windows = np.empty(n_windows, dtype=groups_arr.dtype)
-        for i, start in enumerate(start_idx):
-            w_groups = groups_arr[start : start + self.length]
-            if self.label_strategy == "majority":
-                vals, counts = np.unique(w_groups, return_counts=True)
-                groups_windows[i] = vals[np.argmax(counts)]
-            elif self.label_strategy == "last":
-                groups_windows[i] = w_groups[-1]
-            else:
-                groups_windows[i] = w_groups[0]
-        return X_windows, groups_windows
-
-    def fit_transform(self, X, y=None, groups=None, **fit_params):
-        """Fit and create windows while forwarding sample metadata."""
         self.fit(X, y)
         return self.transform(X, y, groups=groups)
